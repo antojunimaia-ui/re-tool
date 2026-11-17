@@ -1,0 +1,23 @@
+{
+  "name": "@re-tool/core",
+  "version": "0.1.0",
+  "description": "Motor compartilhado do re-tool: leitura de arquivos e utilitários de inspeção",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "dependencies": {
+    "acorn": "^8.14.0",
+    "prettier": "^3.4.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test"
+  }
+}

@@ -1,0 +1,71 @@
+﻿{
+  "schema": "re-tool/report@2",
+  "target": "fixtures/obfuscated.js",
+  "format": {
+    "bundler": "script",
+    "minified": false,
+    "markerSize": 0
+  },
+  "webpack": {
+    "detected": false,
+    "style": "unknown",
+    "modules": [],
+    "moduleCount": 0
+  },
+  "sourceMap": {
+    "present": false
+  },
+  "obfuscators": [
+    {
+      "name": "javascript-obfuscator",
+      "confidence": 0.99,
+      "signals": [
+        "13 identificadores _0xÔÇª",
+        "10 escapes hex em strings",
+        "flattening de fluxo de controle (while + switch)",
+        "acesso a array de strings com ├¡ndice din├ómico"
+      ]
+    }
+  ],
+  "summary": {
+    "bytes": 293,
+    "lines": 1,
+    "totalStrings": 2,
+    "reportedStrings": 2,
+    "totalStringChars": 10,
+    "averageStringLength": 5,
+    "highEntropyCount": 0,
+    "hexEscapedCount": 2,
+    "unicodeEscapedCount": 0,
+    "base64LikeCount": 0,
+    "webpackModules": 0,
+    "sourceMap": null,
+    "obfuscators": 1
+  },
+  "strings": [
+    {
+      "value": "Hello",
+      "start": 32,
+      "end": 54,
+      "line": 1,
+      "column": 33,
+      "kind": "string",
+      "encoding": "hex-escaped",
+      "inFunction": "_0x1234",
+      "length": 5,
+      "entropy": 1.9219280948873623
+    },
+    {
+      "value": "World",
+      "start": 55,
+      "end": 77,
+      "line": 1,
+      "column": 56,
+      "kind": "string",
+      "encoding": "hex-escaped",
+      "inFunction": "_0x1234",
+      "length": 5,
+      "entropy": 2.321928094887362
+    }
+  ]
+}

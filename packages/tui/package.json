@@ -1,0 +1,23 @@
+{
+  "name": "@re-tool/tui",
+  "version": "0.1.0",
+  "description": "Interface de terminal interativa (TUI) para relatórios do re-tool",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.9.2",
+    "@re-tool/core": "0.1.0"
+  }
+}

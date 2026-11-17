@@ -1,0 +1,17 @@
+{
+  "name": "@re-tool/cli",
+  "version": "0.1.0",
+  "description": "Interface de linha de comando do re-tool (search/pos/line)",
+  "type": "module",
+  "bin": {
+    "re-tool": "dist/index.js"
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@re-tool/core": "0.1.0",
+    "@re-tool/tui": "0.1.0"
+  }
+}

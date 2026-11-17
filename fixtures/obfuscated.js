@@ -1,0 +1,1 @@
+function _0x1234(){var _0x5678=['\x48\x65\x6c\x6c\x6f','\x57\x6f\x72\x6c\x64'];return function(_0xabcd){return _0x5678[_0xabcd]}}var _0x2f3c=_0x1234();while(true){switch(_0x2f3c[0]){case 0:console.log(_0x2f3c[1]);break;default:break}}var _0x1a2b=_0x2f3c;console.log(_0x1a2b(0)+" "+_0x1a2b(1));

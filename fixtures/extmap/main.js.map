@@ -1,0 +1,8 @@
+{
+  "version": 3,
+  "file": "main.js",
+  "sources": ["src/orig.ts", "src/util.ts"],
+  "names": ["require", "x", "module"],
+  "mappings": "AAAA;AACA;AACA",
+  "sourcesContent": ["export const x = 42;", "export function util() {}"]
+}
