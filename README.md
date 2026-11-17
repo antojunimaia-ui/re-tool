@@ -2,9 +2,6 @@
 
 A reverse engineering assistant for **JavaScript/Electron**.
 
-Current status: **M0–M4 complete** — a monorepo with an analysis pipeline and
-interactive TUIs (a zero-dependency ANSI engine and an **OpenTUI** engine).
-
 ## Structure
 
 ```
