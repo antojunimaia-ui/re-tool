@@ -1,7 +1,9 @@
 {
-  "name": "@re-tool/cli",
+  "name": "re-tool",
   "version": "0.1.0",
-  "description": "Interface de linha de comando do re-tool (search/pos/line)",
+  "description": "Reverse engineering assistant for JavaScript/Electron — search/extract/scan/asar/tui/beautify/pos/line",
+  "author": "antojunimaia-ui",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "re-tool": "dist/index.js"
@@ -11,7 +13,11 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@re-tool/core": "0.1.0",
-    "@re-tool/tui": "0.1.0"
-  }
+    "re-tool-core": "0.1.0",
+    "re-tool-tui": "0.1.0"
+  },
+  "bundledDependencies": [
+    "re-tool-core",
+    "re-tool-tui"
+  ]
 }

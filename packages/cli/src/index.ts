@@ -16,8 +16,8 @@ import {
   analyzeAsarApp,
   extractCaptures,
   extractAsarFiles,
-} from "@re-tool/core";
-import { renderInteractive, renderPreview, renderOpenTui } from "@re-tool/tui";
+} from "re-tool-core";
+import { renderInteractive, renderPreview, renderOpenTui } from "re-tool-tui";
 
 // Argument parser (lightweight, no external deps)
 // ---------------------------------------------------------------------------

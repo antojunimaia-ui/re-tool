@@ -3,7 +3,7 @@
 // Look & feel: 24-bit palette, bordered panels, per-section themes, shortcut
 // chips and a scroll bar. Requires a (TTY) terminal that supports
 // ANSI/truecolor sequences (Windows Terminal, kitty, iTerm2, VS Code, etc.).
-import type { ScanReport, ElectronReport, AsarFileAnalysis } from "@re-tool/core";
+import type { ScanReport, ElectronReport, AsarFileAnalysis } from "re-tool-core";
 
 export interface Section {
   title: string;

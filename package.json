@@ -9,10 +9,10 @@
   ],
   "scripts": {
     "build": "npm run build:core && npm run build:tui && npm run build:cli",
-    "build:core": "npm run build -w @re-tool/core",
-    "build:tui": "npm run build -w @re-tool/tui",
-    "build:cli": "npm run build -w @re-tool/cli",
-    "test": "npm run build:core && npm run build:tui && npm run test -w @re-tool/core && npm run test -w @re-tool/tui",
+    "build:core": "npm run build -w re-tool-core",
+    "build:tui": "npm run build -w re-tool-tui",
+    "build:cli": "npm run build -w re-tool",
+    "test": "npm run build:core && npm run build:tui && npm run test -w re-tool-core && npm run test -w re-tool-tui",
     "smoke": "npm run build && node packages/cli/dist/index.js search token --file sample.js"
   },
   "devDependencies": {

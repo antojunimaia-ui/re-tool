@@ -1,7 +1,9 @@
 {
-  "name": "@re-tool/core",
+  "name": "re-tool-core",
   "version": "0.1.0",
-  "description": "Motor compartilhado do re-tool: leitura de arquivos e utilitários de inspeção",
+  "description": "Shared analysis engine for re-tool: file reading and inspection utilities",
+  "author": "antojunimaia-ui",
+  "license": "Apache-2.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
