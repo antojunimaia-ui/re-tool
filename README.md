@@ -21,7 +21,16 @@ re-tool/
 - Node.js ≥ 20 (tested on v24; the OpenTUI engine needs Node ≥ 26.4 or Bun)
 - npm ≥ 10
 
-## Install & build
+## Install
+
+```sh
+# Publicado no npm (binário: re-tool)
+npm i -g @juniormaia/re-tool
+```
+
+> O pacote é auto-contido: `re-tool-core` e `re-tool-tui` vêm embutidos.
+
+## Build from source
 
 ```sh
 npm install
