@@ -15,12 +15,12 @@ const HELP = `
 Usage:
   node scripts/publish-single.mjs [options]
 
-Builds the self-contained single npm package "re-tool" (bundling
+Builds the self-contained single npm package "@juniormaia/re-tool" (bundling
 re-tool-core and re-tool-tui into node_modules).
 
 Options:
   -o, --out <dir>      Output directory (default: .out/re-tool)
-  -n, --name <name>    Package name (default: re-tool)
+  -n, --name <name>    Package name (default: @juniormaia/re-tool)
   -v, --version <ver>  Package version (default: 0.1.0)
       --build          Run "npm run build" at the repo root first
       --pack           Also create the tarball (npm pack) in --out
@@ -37,7 +37,7 @@ const INTERNAL = {
 function parseArgs(argv) {
   const opts = {
     out: DEFAULT_OUT,
-    name: "re-tool",
+    name: "@juniormaia/re-tool",
     version: "0.1.0",
     build: false,
     pack: false,
@@ -144,6 +144,9 @@ function assembleSinglePackage(opts) {
           "node_modules/re-tool-core",
           "node_modules/re-tool-tui",
         ],
+        publishConfig: {
+          access: "public",
+        },
         dependencies: {
           "@opentui/core": "^0.9.2",
           acorn: "^8.14.0",
@@ -175,7 +178,8 @@ function main() {
   }
 
   if (opts.publish) {
-    const cmd = opts.otp ? `npm publish --otp ${opts.otp}` : "npm publish";
+    let cmd = "npm publish --access public";
+    if (opts.otp) cmd += ` --otp ${opts.otp}`;
     const pub = spawnSync(cmd, {
       cwd: opts.out,
       stdio: "inherit",
