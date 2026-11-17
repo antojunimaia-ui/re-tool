@@ -91,7 +91,11 @@ function parseArgs(argv) {
 
 function assembleSinglePackage(opts) {
   if (opts.build) {
-    const b = spawnSync("npm", ["run", "build"], { cwd: ROOT, stdio: "inherit" });
+    const b = spawnSync("npm run build", {
+      cwd: ROOT,
+      stdio: "inherit",
+      shell: true,
+    });
     if (b.status !== 0) process.exit(b.status ?? 1);
   }
 
@@ -162,14 +166,21 @@ function main() {
   assembleSinglePackage(opts);
 
   if (opts.pack) {
-    const pack = spawnSync("npm", ["pack"], { cwd: opts.out, stdio: "inherit" });
+    const pack = spawnSync("npm pack", {
+      cwd: opts.out,
+      stdio: "inherit",
+      shell: true,
+    });
     if (pack.status !== 0) process.exit(pack.status ?? 1);
   }
 
   if (opts.publish) {
-    const publishArgs = ["publish"];
-    if (opts.otp) publishArgs.push("--otp", opts.otp);
-    const pub = spawnSync("npm", publishArgs, { cwd: opts.out, stdio: "inherit" });
+    const cmd = opts.otp ? `npm publish --otp ${opts.otp}` : "npm publish";
+    const pub = spawnSync(cmd, {
+      cwd: opts.out,
+      stdio: "inherit",
+      shell: true,
+    });
     process.exit(pub.status ?? 1);
   }
 }
