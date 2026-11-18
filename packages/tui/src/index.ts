@@ -276,6 +276,7 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           `description: ${r.page.description ?? "—"}`,
           `generator: ${r.page.generator ?? "—"}`,
           `base: ${r.page.baseUrl}`,
+          `ua: ${r.page.userAgent ?? "—"}${r.page.userAgentFallback ? " (browser fallback)" : ""}`,
           `robots: ${r.page.robots.checked ? (r.page.robots.allowed ? "allowed" : "blocked") : "not checked"}${r.page.robots.rule ? ` (${r.page.robots.rule})` : ""}`,
           ...r.page.redirects.map((x) => `redirect: ${x.from} → ${x.to}`),
         ],

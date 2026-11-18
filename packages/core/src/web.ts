@@ -15,6 +15,11 @@ import type { FileSource } from "./index.js";
 
 const DEFAULT_USER_AGENT =
   "re-tool/0.2.0 (+https://github.com/antojunimaia-ui/re-tool)";
+
+// Used for a single retry when a site rejects the honest re-tool UA with
+// 403/406/429 (common with bot protection). The report records which UA won.
+const BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_FINDING_STRINGS = 20000;
 
 // ---------------------------------------------------------------------------
@@ -36,6 +41,8 @@ export interface AnalyzeWebOptions {
   timeoutMs?: number;
   /** Overrides the User-Agent header. */
   userAgent?: string;
+  /** Cookie header sent with every request (e.g. "session=abc; theme=dark"). */
+  cookie?: string;
   /** Skips the robots.txt check (use only on targets you own). */
   ignoreRobots?: boolean;
   /** Max endpoints included in the report. Default: 500. */
@@ -135,6 +142,9 @@ export interface WebPageInfo {
   description: string | null;
   generator: string | null;
   baseUrl: string;
+  userAgent: string;
+  /** true when the browser-like UA retry was needed to get the page. */
+  userAgentFallback: boolean;
   redirects: { from: string; to: string }[];
   robots: { checked: boolean; allowed: boolean; rule?: string };
 }
@@ -224,6 +234,7 @@ interface FetchOptions {
   timeoutMs?: number;
   maxBytes?: number;
   userAgent?: string;
+  cookie?: string;
   accept?: string;
 }
 
@@ -247,15 +258,18 @@ async function fetchResource(
   const maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
 
   let res: Response;
+  const headers: Record<string, string> = {
+    "user-agent": opts.userAgent ?? DEFAULT_USER_AGENT,
+    accept: opts.accept ?? "*/*",
+    "accept-language": "en-US,en;q=0.9",
+  };
+  if (opts.cookie) headers.cookie = opts.cookie;
+
   try {
     res = await fetch(url, {
       redirect: "follow",
       signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        "user-agent": opts.userAgent ?? DEFAULT_USER_AGENT,
-        accept: opts.accept ?? "*/*",
-        "accept-language": "en-US,en;q=0.9",
-      },
+      headers,
     });
   } catch (err) {
     throw new ToolError(`Request failed for ${url}: ${describeFetchError(err)}`);
@@ -919,6 +933,23 @@ export function maskSecret(value: string): string {
 // Main entry point
 // ---------------------------------------------------------------------------
 
+function httpStatusHint(status: number): string {
+  switch (status) {
+    case 401:
+      return ". The page requires authentication — pass a session with --cookie \"name=value\" if you have one.";
+    case 403:
+      return ". The site rejected the request (bot protection or a required session). Try --user-agent \"<browser UA>\" or --cookie \"name=value\"; sites protected by JS challenges need a real browser.";
+    case 406:
+      return ". The site refused the requested representation — try a different --user-agent.";
+    case 429:
+      return ". Rate limited — wait and retry, or raise --timeout.";
+    case 451:
+      return ". Unavailable for legal reasons.";
+    default:
+      return "";
+  }
+}
+
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
@@ -954,10 +985,11 @@ export async function analyzeWeb(
   let byteBudget = totalLimit;
   const timeoutMs = opts.timeoutMs ?? 15000;
   const userAgent = opts.userAgent;
+  const cookie = opts.cookie;
 
   const robots = opts.ignoreRobots
     ? { checked: false, allowed: true }
-    : await checkRobots(requested, { timeoutMs, userAgent });
+    : await checkRobots(requested, { timeoutMs, userAgent, cookie });
 
   if (!robots.allowed) {
     throw new ToolError(
@@ -966,20 +998,41 @@ export async function analyzeWeb(
     );
   }
 
-  let page: FetchedResource;
-  try {
-    page = await fetchResource(requested.href, {
+  const fetchPage = (ua: string) =>
+    fetchResource(requested.href, {
       timeoutMs,
       maxBytes: 4 * 1024 * 1024,
-      userAgent,
+      userAgent: ua,
+      cookie,
       accept: "text/html,application/xhtml+xml,*/*;q=0.8",
     });
+
+  let usedUserAgent = userAgent ?? DEFAULT_USER_AGENT;
+  let userAgentFallback = false;
+  let page: FetchedResource;
+  try {
+    page = await fetchPage(usedUserAgent);
   } catch (err) {
     throw err instanceof ToolError ? err : new ToolError(String(err));
   }
 
+  // Some sites reject non-browser clients (bot protection). Unless the user
+  // chose a UA, retry once with a browser-like one and record it.
+  if (!userAgent && (page.status === 403 || page.status === 406 || page.status === 429)) {
+    try {
+      const retry = await fetchPage(BROWSER_USER_AGENT);
+      if (retry.status < 400) {
+        page = retry;
+        usedUserAgent = BROWSER_USER_AGENT;
+        userAgentFallback = true;
+      }
+    } catch {
+      /* keep the original response/hint */
+    }
+  }
+
   if (page.status >= 400) {
-    throw new ToolError(`HTTP ${page.status} for ${page.url}`);
+    throw new ToolError(`HTTP ${page.status} for ${page.url}${httpStatusHint(page.status)}`);
   }
 
   const parsed = parseHtml(page.text, page.url);
@@ -1181,6 +1234,8 @@ export async function analyzeWeb(
       description: parsed.meta["description"] ?? parsed.meta["og:description"] ?? null,
       generator: parsed.meta["generator"] ?? null,
       baseUrl: parsed.baseUrl,
+      userAgent: usedUserAgent,
+      userAgentFallback,
       redirects:
         page.url === requested.href ? [] : [{ from: requested.href, to: page.url }],
       robots,

@@ -231,6 +231,33 @@ test.before(async () => {
       res.end(PAGE);
       return;
     }
+    if (url.pathname === "/ua") {
+      const ua = req.headers["user-agent"] ?? "";
+      if (!ua.startsWith("Mozilla/")) {
+        res.writeHead(403, { "content-type": "text/plain" });
+        res.end("blocked");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(PAGE);
+      return;
+    }
+    if (url.pathname === "/needs-cookie") {
+      const cookie = req.headers.cookie ?? "";
+      if (!cookie.includes("session=abc")) {
+        res.writeHead(401, { "content-type": "text/plain" });
+        res.end("auth required");
+        return;
+      }
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(PAGE);
+      return;
+    }
+    if (url.pathname === "/forbidden") {
+      res.writeHead(403, { "content-type": "text/plain" });
+      res.end("no");
+      return;
+    }
     if (url.pathname === "/redirect") {
       res.writeHead(302, { location: "/" });
       res.end();
@@ -323,6 +350,44 @@ test("analyzeWeb respects robots.txt and can be forced with ignoreRobots", async
 
 test("analyzeWeb reports HTTP errors as ToolError", async () => {
   await assert.rejects(() => analyzeWeb(`${base}/missing`, { timeoutMs: 5000 }), /HTTP 404/);
+});
+
+test("analyzeWeb retries with a browser UA when the site rejects re-tool", async () => {
+  const report = await analyzeWeb(`${base}/ua`, { timeoutMs: 5000 });
+  assert.equal(report.page.status, 200);
+  assert.equal(report.page.userAgentFallback, true);
+  assert.match(report.page.userAgent, /^Mozilla\//);
+});
+
+test("analyzeWeb keeps a custom UA and explains a 403", async () => {
+  await assert.rejects(
+    () => analyzeWeb(`${base}/ua`, { timeoutMs: 5000, userAgent: "re-tool-test" }),
+    (err) =>
+      err instanceof ToolError &&
+      /HTTP 403/.test(err.message) &&
+      /bot protection/.test(err.message) &&
+      /--user-agent/.test(err.message),
+  );
+});
+
+test("analyzeWeb sends the cookie header and explains a 401", async () => {
+  const report = await analyzeWeb(`${base}/needs-cookie`, {
+    timeoutMs: 5000,
+    cookie: "session=abc",
+  });
+  assert.equal(report.page.status, 200);
+
+  await assert.rejects(
+    () => analyzeWeb(`${base}/needs-cookie`, { timeoutMs: 5000 }),
+    /HTTP 401.*authentication/,
+  );
+});
+
+test("analyzeWeb explains a 403 with actionable hints", async () => {
+  await assert.rejects(
+    () => analyzeWeb(`${base}/forbidden`, { timeoutMs: 5000 }),
+    (err) => /HTTP 403/.test(err.message) && /--cookie/.test(err.message),
+  );
 });
 
 test("analyzeWeb enforces the total byte budget", async () => {

@@ -431,7 +431,18 @@ async function cmdTui(args: ParsedArgs): Promise<void> {
 
   if (webTarget) {
     const webLimit = args.options.has("limit") ? limit : 50;
-    report = await analyzeWeb(webTarget, { minLength, limit: webLimit });
+    report = await analyzeWeb(webTarget, {
+      minLength,
+      limit: webLimit,
+      maxScripts: parseNonNegativeInt(optValue(args.options, "max-scripts"), 40, "Max scripts"),
+      timeoutMs: Math.max(
+        1,
+        parseNonNegativeInt(optValue(args.options, "timeout"), 15000, "Timeout"),
+      ),
+      userAgent: optValue(args.options, "user-agent", "ua"),
+      cookie: optValue(args.options, "cookie"),
+      ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
+    });
   } else if (scanTarget) {
     const targetFile = resolveTarget(scanTarget);
     report = /\.asar$/i.test(targetFile)
@@ -468,6 +479,9 @@ function printWebSummary(r: WebReport): void {
     `[re-tool] web ${r.target} — ${r.page.status} ${r.page.contentType ?? "?"} (${formatBytes(r.page.bytes)}) in ${r.summary.elapsedMs} ms`,
   );
   if (r.page.title) console.log(`  title: ${r.page.title}`);
+  if (r.page.userAgentFallback) {
+    console.log("  ua: retried with a browser-like User-Agent (site rejected re-tool UA)");
+  }
   console.log(
     `  robots: ${
       r.page.robots.checked
@@ -550,6 +564,7 @@ async function cmdWeb(args: ParsedArgs): Promise<void> {
     maxScripts,
     timeoutMs,
     userAgent: optValue(args.options, "user-agent", "ua"),
+    cookie: optValue(args.options, "cookie"),
     ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
   });
 
@@ -702,6 +717,7 @@ web options:
       --max-scripts <n> Max scripts downloaded (default: 40)
       --timeout <ms>   Per-request timeout (default: 15000)
       --user-agent <ua> Override the User-Agent header
+      --cookie <header> Cookie header sent with every request (session=abc; theme=dark)
       --ignore-robots  Skip the robots.txt check (only on authorized targets)
       --tui            Open the TUI right after the analysis
       --preview        Print a static TUI frame
@@ -713,6 +729,7 @@ beautify options:
 tui options:
       --scan <file>    Run analysis and open the TUI directly
       --web <url>      Analyze a live site and open the TUI directly
+                       (accepts --user-agent, --cookie, --ignore-robots, --max-scripts, --timeout)
       --preview        Print a static frame (no interaction; ansi engine only)
       --engine <name>  Engine: ansi (default) | opentui (needs Node >= 26.4 or Bun)
       --min-length <n> (with --scan/--web) Ignore shorter strings

@@ -116,6 +116,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--max-scripts <n>` | web | `40` | Max scripts downloaded |
 | `--timeout <ms>` | web | `15000` | Per-request timeout |
 | `--user-agent <ua>` | web | `re-tool/0.2.0` | Override the User-Agent header |
+| `--cookie <header>` | web | — | Cookie header (e.g. `session=abc; theme=dark`) |
 | `--ignore-robots` | web | — | Skip the `robots.txt` check (authorized targets only) |
 | `--tui` | web | — | Open the TUI right after the analysis |
 
@@ -180,7 +181,14 @@ re-tool web https://example.com
 re-tool web example.com --json --out web-report.json
 re-tool web https://example.com --tui      # open the TUI right away
 re-tool tui --web https://example.com      # equivalent
+re-tool web https://example.com --cookie "session=abc; theme=dark"
 ```
+
+If a site rejects the honest `re-tool` User-Agent with **403/406/429**, the tool
+retries **once** with a browser-like UA and records it in
+`page.userAgentFallback`. Sites behind JS challenges (Cloudflare/Vercel
+checkpoints) still need a real browser (phase 2). For pages behind a login,
+pass your own session with `--cookie`.
 
 > **Authorized use only.** The tool respects `robots.txt` by default
 > (`--ignore-robots` overrides it) and identifies itself with a `re-tool`
