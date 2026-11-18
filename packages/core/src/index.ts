@@ -332,3 +332,4 @@ export * from "./webpack.js";
 export * from "./sourcemap.js";
 export * from "./obfuscators.js";
 export * from "./asar.js";
+export * from "./web.js";

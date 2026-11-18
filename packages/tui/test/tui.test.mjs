@@ -99,7 +99,7 @@ test("buildSections: electron report (electron-report@1)", () => {
   assert.equal(sections[0].title, "Summary");
   assert.ok(sections.some((s) => s.title === "main.js (1)"));
   const file = sections.find((s) => s.title === "main.js (1)");
-  assert.ok(file.lines.some((l) => l.includes("tamanho: 60B")));
+  assert.ok(file.lines.some((l) => l.includes("size: 60B")));
 });
 
 test("buildSections: hex strings with inFunction show context", () => {

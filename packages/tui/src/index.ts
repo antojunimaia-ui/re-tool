@@ -3,7 +3,13 @@
 // Look & feel: 24-bit palette, bordered panels, per-section themes, shortcut
 // chips and a scroll bar. Requires a (TTY) terminal that supports
 // ANSI/truecolor sequences (Windows Terminal, kitty, iTerm2, VS Code, etc.).
-import type { ScanReport, ElectronReport, AsarFileAnalysis } from "re-tool-core";
+import {
+  maskSecret,
+  type ScanReport,
+  type ElectronReport,
+  type AsarFileAnalysis,
+  type WebReport,
+} from "re-tool-core";
 
 export interface Section {
   title: string;
@@ -105,8 +111,8 @@ function summaryLines(summary: ScanReport["summary"]): string[] {
 function formatLines(format: ScanReport["format"]): string[] {
   return [
     `bundler: ${format.bundler}`,
-    `minificado: ${format.minified}`,
-    `marcador: ${format.markerSize}`,
+    `minified: ${format.minified}`,
+    `marker: ${format.markerSize}`,
   ];
 }
 
@@ -151,14 +157,14 @@ function obfuscatorLines(list: ScanReport["obfuscators"]): string[] {
 
 function stringLine(s: ScanReport["strings"][number]): string {
   const where = `[${s.line}:${s.column}]`;
-  const fn = s.inFunction ? ` em ${s.inFunction}` : "";
+  const fn = s.inFunction ? ` in ${s.inFunction}` : "";
   return `${JSON.stringify(s.value)}  ${where} ${s.encoding} len=${s.length} ent=${s.entropy.toFixed(2)}${fn}`;
 }
 
 function fileLines(f: AsarFileAnalysis): string[] {
   const out: string[] = [];
-  out.push(`tamanho: ${f.size}B`);
-  out.push(`bundler: ${f.format.bundler} · minificado: ${f.format.minified}`);
+  out.push(`size: ${f.size}B`);
+  out.push(`bundler: ${f.format.bundler} · minified: ${f.format.minified}`);
   if (f.parseError) out.push(`parseError: ${f.parseError}`);
   out.push(`webpack modules: ${f.webpackModules}`);
   for (const o of f.obfuscators ?? []) {
@@ -217,6 +223,15 @@ export function getStringsForTui(
     return { target: str(r.target), strings };
   }
 
+  if (str(report.schema) === "re-tool/web-report@1") {
+    const r = report as unknown as WebReport;
+    const strings: TuiStringItem[] = [];
+    for (const f of r.files) {
+      for (const s of f.strings) strings.push(toItem(f.path, s));
+    }
+    return { target: str(r.target), strings };
+  }
+
   const r = report as unknown as ScanReport;
   if (!Array.isArray(r.strings)) return null;
   return { target: str(r.target), strings: r.strings.map((s) => toItem(str(r.target), s)) };
@@ -234,6 +249,66 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           `strings ${r.summary.totalStrings} · base64 ${r.summary.base64Like} · hex ${r.summary.hexEscaped} · high-entropy ${r.summary.highEntropy}`,
           `files with obfuscation ${r.summary.obfuscatorFiles} · webpack ${r.summary.webpackFiles}`,
         ],
+      },
+    ];
+    for (const f of r.files) {
+      sections.push({ title: `${f.path} (${f.stringTotal})`, lines: fileLines(f) });
+    }
+    return sections;
+  }
+
+  if (str(report.schema) === "re-tool/web-report@1") {
+    const r = report as unknown as WebReport;
+    const sections: Section[] = [
+      {
+        title: "Summary",
+        lines: [
+          `url ${r.target}`,
+          `status ${r.page.status} · ${r.page.contentType ?? "?"} · ${r.page.bytes} bytes · ${r.summary.elapsedMs} ms`,
+          `assets ${r.summary.assets} · scripts ${r.summary.scripts} · analyzed ${r.summary.scriptsAnalyzed} · jsBytes ${r.summary.jsBytes} · errors ${r.summary.fetchErrors} · skipped ${r.summary.skippedAssets ?? 0}`,
+          `strings ${r.summary.totalStrings} · frameworks ${r.summary.frameworks} · endpoints ${r.summary.endpoints} · routes ${r.summary.routes} · keys ${r.summary.keys} · flags ${r.summary.featureFlags}`,
+        ],
+      },
+      {
+        title: "Page",
+        lines: [
+          `title: ${r.page.title ?? "—"}`,
+          `description: ${r.page.description ?? "—"}`,
+          `generator: ${r.page.generator ?? "—"}`,
+          `base: ${r.page.baseUrl}`,
+          `robots: ${r.page.robots.checked ? (r.page.robots.allowed ? "allowed" : "blocked") : "not checked"}${r.page.robots.rule ? ` (${r.page.robots.rule})` : ""}`,
+          ...r.page.redirects.map((x) => `redirect: ${x.from} → ${x.to}`),
+        ],
+      },
+      {
+        title: `Frameworks (${r.frameworks.length})`,
+        lines: r.frameworks.map(
+          (f) =>
+            `${f.name}${f.version ? ` ${f.version}` : ""}  [${f.category}] ${f.confidence} — ${f.evidence.join(", ")}`,
+        ),
+      },
+      {
+        title: `Endpoints (${r.endpoints.length})`,
+        lines: r.endpoints.map((e) => `${e.value}  (${e.kind} x${e.count})  ${e.source}:${e.line}`),
+      },
+      {
+        title: `Routes (${r.routes.length})`,
+        lines: r.routes.map((x) => `${x.path}  x${x.count}  ${x.source}:${x.line}`),
+      },
+      {
+        title: `Keys (${r.keys.length})`,
+        lines: r.keys.map((k) => `${k.kind}  ${maskSecret(k.value)}  ${k.source}:${k.line}`),
+      },
+      {
+        title: `Flags (${r.featureFlags.length})`,
+        lines: r.featureFlags.map((f) => `${f.name}  ${f.source}:${f.line}`),
+      },
+      {
+        title: `Assets (${r.assets.length})`,
+        lines: r.assets.map(
+          (a) =>
+            `${a.type}  ${a.path}  ${a.bytes}B  ${a.status ?? "—"}${a.analyzed ? "  analyzed" : ""}${a.error ? `  (${a.error})` : ""}`,
+        ),
       },
     ];
     for (const f of r.files) {
@@ -270,8 +345,15 @@ function sectionTheme(title: string): RGB {
   if (title === "Webpack") return C.purple;
   if (title === "SourceMap") return C.accent;
   if (title === "Obfuscators") return C.danger;
+  if (title === "Page") return C.info;
+  if (title.startsWith("Frameworks")) return C.purple;
+  if (title.startsWith("Endpoints")) return C.accent;
+  if (title.startsWith("Routes")) return C.warn;
+  if (title.startsWith("Keys")) return C.danger;
+  if (title.startsWith("Flags")) return C.good;
+  if (title.startsWith("Assets")) return C.dim;
   if (title.startsWith("Strings")) return C.good;
-  return C.text; // files in the electron report
+  return C.text; // files in the electron/web report
 }
 
 function panelTitleColor(title: string): RGB {
@@ -363,6 +445,13 @@ function composeFrame(ctx: FrameCtx): string {
     chips.push(`${r.summary.totalStrings} strings`);
     if (r.summary.webpackFiles > 0) chips.push(`${r.summary.webpackFiles} webpack`);
     if (r.summary.obfuscatorFiles > 0) chips.push(`${r.summary.obfuscatorFiles} obfuscated`);
+  } else if (str(report.schema) === "re-tool/web-report@1") {
+    const r = report as unknown as WebReport;
+    chips.push(`${r.assets.length} assets`);
+    chips.push(`${r.endpoints.length} endpoints`);
+    if (r.routes.length > 0) chips.push(`${r.routes.length} routes`);
+    if (r.keys.length > 0) chips.push(`${r.keys.length} keys`);
+    if (r.frameworks.length > 0) chips.push(`${r.frameworks.length} frameworks`);
   } else {
     const r = report as unknown as ScanReport;
     chips.push(`${r.summary.totalStrings} strings`);

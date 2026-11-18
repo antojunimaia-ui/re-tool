@@ -1,7 +1,7 @@
 {
   "name": "re-tool",
-  "version": "0.1.0",
-  "description": "Assistente de engenharia reversa para JavaScript/Electron (M0: search/pos/line)",
+  "version": "0.2.0",
+  "description": "Reverse engineering assistant for JavaScript/Electron and live web targets",
   "private": true,
   "type": "module",
   "workspaces": [

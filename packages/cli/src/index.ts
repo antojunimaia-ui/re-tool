@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFile, readFile } from "node:fs/promises";
+import { writeFile, readFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -16,6 +16,9 @@ import {
   analyzeAsarApp,
   extractCaptures,
   extractAsarFiles,
+  analyzeWeb,
+  maskSecret,
+  type WebReport,
 } from "re-tool-core";
 import { renderInteractive, renderPreview, renderOpenTui } from "re-tool-tui";
 
@@ -42,6 +45,8 @@ const BOOL_FLAGS = new Set([
   "a",
   "no-limit",
   "extract",
+  "ignore-robots",
+  "tui",
 ]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -116,7 +121,7 @@ function parseNonNegativeInt(raw: string | undefined, fallback: number, label: s
   if (raw === undefined) return fallback;
   const v = Number(raw);
   if (!Number.isInteger(v) || v < 0) {
-    throw new ToolError(`${label} deve ser um inteiro >= 0 (recebido: "${raw}").`);
+    throw new ToolError(`${label} must be an integer >= 0 (got: "${raw}").`);
   }
   return v;
 }
@@ -372,12 +377,45 @@ async function cmdAsar(args: ParsedArgs): Promise<void> {
   }
 }
 
+/** Renders a report with the selected TUI engine. */
+async function openReport(
+  report: Record<string, unknown>,
+  engine: string,
+  preview: boolean,
+): Promise<void> {
+  if (preview) {
+    if (engine === "opentui") {
+      throw new ToolError("--preview is only available with --engine ansi.");
+    }
+    process.stdout.write(renderPreview(report));
+    return;
+  }
+
+  if (engine === "opentui") {
+    try {
+      await renderOpenTui(report);
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("OpenTUI requires")) {
+        if (relaunchWithPortableNode()) return;
+        throw new ToolError(
+          `${err.message}\n(note: portable Node in .tools/ was not found — install Node >= 26.4 or Bun)`,
+        );
+      }
+      throw err;
+    }
+    return;
+  }
+
+  await renderInteractive(report);
+}
+
 async function cmdTui(args: ParsedArgs): Promise<void> {
   const file = args.positional[1];
   const scanTarget = optValue(args.options, "scan", "s");
-  if (!file && !scanTarget) {
+  const webTarget = optValue(args.options, "web", "w");
+  if (!file && !scanTarget && !webTarget) {
     throw new ToolError(
-      'Usage: re-tool tui <report.json> | re-tool tui --scan <file>  (see "re-tool help")',
+      'Usage: re-tool tui <report.json> | re-tool tui --scan <file> | re-tool tui --web <url>  (see "re-tool help")',
     );
   }
 
@@ -391,7 +429,10 @@ async function cmdTui(args: ParsedArgs): Promise<void> {
 
   let report: unknown;
 
-  if (scanTarget) {
+  if (webTarget) {
+    const webLimit = args.options.has("limit") ? limit : 50;
+    report = await analyzeWeb(webTarget, { minLength, limit: webLimit });
+  } else if (scanTarget) {
     const targetFile = resolveTarget(scanTarget);
     report = /\.asar$/i.test(targetFile)
       ? await analyzeAsarApp(targetFile, { minLength, limit })
@@ -412,30 +453,125 @@ async function cmdTui(args: ParsedArgs): Promise<void> {
     }
   }
 
-  if (preview) {
-    if (engine === "opentui") {
-      throw new ToolError("--preview is only available with --engine ansi.");
+  await openReport(report as Record<string, unknown>, engine, preview);
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} kB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
+}
+
+/** Compact human-readable summary of a web report (JSON stays the source of truth). */
+function printWebSummary(r: WebReport): void {
+  console.log(
+    `[re-tool] web ${r.target} — ${r.page.status} ${r.page.contentType ?? "?"} (${formatBytes(r.page.bytes)}) in ${r.summary.elapsedMs} ms`,
+  );
+  if (r.page.title) console.log(`  title: ${r.page.title}`);
+  console.log(
+    `  robots: ${
+      r.page.robots.checked
+        ? r.page.robots.allowed
+          ? "allowed"
+          : "blocked"
+        : "not checked"
+    }${r.page.robots.rule ? ` (${r.page.robots.rule})` : ""}`,
+  );
+
+  if (r.frameworks.length) {
+    console.log(
+      `  frameworks: ${r.frameworks
+        .map((f) => `${f.name}${f.version ? ` ${f.version}` : ""} [${f.category}]`)
+        .join(", ")}`,
+    );
+  }
+
+  console.log(
+    `  assets: ${r.summary.assets} · scripts ${r.summary.scripts} (analyzed ${r.summary.scriptsAnalyzed}${
+      r.summary.fetchErrors ? `, ${r.summary.fetchErrors} failed` : ""
+    }${r.summary.skippedAssets ? `, ${r.summary.skippedAssets} skipped` : ""}) · JS ${formatBytes(r.summary.jsBytes)}`,
+  );
+  console.log(
+    `  findings: ${r.summary.totalStrings} strings · ${r.summary.endpoints} endpoints · ${r.summary.routes} routes · ${r.summary.keys} keys · ${r.summary.featureFlags} flags`,
+  );
+
+  if (r.keys.length) {
+    console.log("  keys:");
+    for (const k of r.keys.slice(0, 10)) {
+      console.log(`    ${k.kind}  ${maskSecret(k.value)}  (${k.source}:${k.line})`);
     }
-    process.stdout.write(renderPreview(report as Record<string, unknown>));
+    if (r.keys.length > 10) {
+      console.log(`    (+${r.keys.length - 10} more — use --json)`);
+    }
+  }
+
+  if (r.endpoints.length) {
+    console.log("  endpoints (top 10 by occurrences):");
+    for (const e of r.endpoints.slice(0, 10)) {
+      console.log(`    ${e.value}  (${e.kind} x${e.count})  ${e.source}:${e.line}`);
+    }
+  }
+
+  if (r.routes.length) {
+    console.log("  routes (top 10 by occurrences):");
+    for (const x of r.routes.slice(0, 10)) {
+      console.log(`    ${x.path}  x${x.count}  ${x.source}:${x.line}`);
+    }
+  }
+
+  console.log(`  (full report: re-tool web ${r.target} --json)`);
+}
+
+async function cmdWeb(args: ParsedArgs): Promise<void> {
+  const target = args.positional[1];
+  if (!target) {
+    throw new ToolError('Usage: re-tool web <url> [options]  (see "re-tool help")');
+  }
+
+  const minLength = parseNonNegativeInt(optValue(args.options, "min-length"), 4, "Minimum length");
+  const limit = parseNonNegativeInt(optValue(args.options, "limit"), 50, "Limit");
+  const maxScripts = parseNonNegativeInt(optValue(args.options, "max-scripts"), 40, "Max scripts");
+  const timeoutMs = Math.max(
+    1,
+    parseNonNegativeInt(optValue(args.options, "timeout"), 15000, "Timeout"),
+  );
+
+  const asJson = hasFlag(args.bools, args.options, "json");
+  const withTui = hasFlag(args.bools, args.options, "tui");
+  const preview = hasFlag(args.bools, args.options, "preview");
+  const engine = optValue(args.options, "engine", "e") ?? "ansi";
+  if (engine !== "ansi" && engine !== "opentui") {
+    throw new ToolError(`Unknown engine: "${engine}" (use ansi | opentui)`);
+  }
+
+  const report = await analyzeWeb(target, {
+    minLength,
+    limit,
+    maxScripts,
+    timeoutMs,
+    userAgent: optValue(args.options, "user-agent", "ua"),
+    ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
+  });
+
+  const outPath = optValue(args.options, "out", "o");
+  if (outPath) {
+    const dest = path.resolve(outPath);
+    await mkdir(path.dirname(dest), { recursive: true });
+    await writeFile(dest, JSON.stringify(report, null, 2) + "\n", "utf8");
+    console.error(`[re-tool] Report written to ${dest}`);
+  }
+
+  if (asJson) {
+    printJson(report);
     return;
   }
 
-  if (engine === "opentui") {
-    try {
-      await renderOpenTui(report as Record<string, unknown>);
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith("OpenTUI requires")) {
-        if (relaunchWithPortableNode()) return;
-        throw new ToolError(
-          `${err.message}\n(note: portable Node in .tools/ was not found — install Node >= 26.4 or Bun)`,
-        );
-      }
-      throw err;
-    }
+  if (withTui || preview) {
+    await openReport(report as unknown as Record<string, unknown>, engine, preview);
     return;
   }
 
-  await renderInteractive(report as Record<string, unknown>);
+  printWebSummary(report);
 }
 
 /**
@@ -519,8 +655,10 @@ Commands:
   extract <regex>   Extract regex capture groups (group 1 or full match)
   scan <file>       Run the analysis pipeline (format, strings, summary) → JSON
                     (accepts .asar: analyzes the whole Electron app)
+  web <url>         Analyze a live site (HTML + JS bundles)
+                    finds frameworks, endpoints, routes, keys, flags
   asar <file>       List the contents of an .asar file (Electron)
-  tui              Navigate a report interactively (JSON file or --scan)
+  tui              Navigate a report interactively (JSON file or --scan/--web)
   beautify <file>   Reformat (de-minify) code for reading
   pos <offset>      Show a content window around an offset
   line <number>     Show a specific line of the file
@@ -556,14 +694,28 @@ scan options:
       --min-length <n> Ignore strings shorter than this (default: 4)
       --limit <n>      Max strings in the report (default: 750)
 
+web options:
+      --json           Print the full report as JSON
+  -o, --out <path>     Also write the JSON report to a file
+      --min-length <n> Ignore strings shorter than this (default: 4)
+      --limit <n>      Max strings per script in the report (default: 50)
+      --max-scripts <n> Max scripts downloaded (default: 40)
+      --timeout <ms>   Per-request timeout (default: 15000)
+      --user-agent <ua> Override the User-Agent header
+      --ignore-robots  Skip the robots.txt check (only on authorized targets)
+      --tui            Open the TUI right after the analysis
+      --preview        Print a static TUI frame
+      --engine <name>  TUI engine: ansi (default) | opentui
+
 beautify options:
   -o, --out <path>    Write output to file instead of printing
 
 tui options:
       --scan <file>    Run analysis and open the TUI directly
+      --web <url>      Analyze a live site and open the TUI directly
       --preview        Print a static frame (no interaction; ansi engine only)
       --engine <name>  Engine: ansi (default) | opentui (needs Node >= 26.4 or Bun)
-      --min-length <n> (with --scan) Ignore shorter strings
+      --min-length <n> (with --scan/--web) Ignore shorter strings
 
 Examples:
   re-tool search "token" --file app/bundle.js
@@ -571,6 +723,10 @@ Examples:
   re-tool search "API_[A-Z_]+" --regex --limit 20 --json
   re-tool extract "\.lsClient\.([a-zA-Z0-9_]+)\(" --file main.js --unique --json
   re-tool scan app/bundle.js --min-length 6
+  re-tool web https://example.com
+  re-tool web example.com --json --out web-report.json
+  re-tool web https://example.com --tui
+  re-tool tui --web https://example.com
   re-tool beautify app/bundle.js --out bundle.pretty.js
   re-tool tui report.json
   re-tool tui --scan app/bundle.js
@@ -606,6 +762,9 @@ async function main(): Promise<void> {
       case "scan":
         await cmdScan(args);
         break;
+      case "web":
+        await cmdWeb(args);
+        break;
       case "extract":
         await cmdExtract(args);
         break;
@@ -623,7 +782,7 @@ async function main(): Promise<void> {
     }
   } catch (err) {
     if (err instanceof ToolError) {
-      console.error(`[re-tool] Erro: ${err.message}`);
+      console.error(`[re-tool] Error: ${err.message}`);
       process.exit(err.exitCode);
     }
     throw err;
@@ -631,6 +790,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("[re-tool] Erro inesperado:", err);
+  console.error("[re-tool] Unexpected error:", err);
   process.exit(1);
 });
