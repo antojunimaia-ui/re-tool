@@ -77,6 +77,9 @@ scan options:
       --limit <n>      Max strings in the report (default: 750)
 
 web options:
+  -d, --download <dir> Download discovered files (HTML, JS, CSS) to directory
+  -m, --match <glob>   With --download: only matching files (e.g. "*.js")
+                       (specific files can be passed as trailing args)
       --json           Print the full report as JSON
   -o, --out <path>     Also write the JSON report to a file
       --min-length <n> Ignore strings shorter than this (default: 4)
@@ -118,6 +121,9 @@ Examples:
   re-tool extract "\\.lsClient\\.([a-zA-Z0-9_]+)\\(" --file main.js --unique --json
   re-tool scan app/bundle.js --min-length 6
   re-tool web https://example.com
+  re-tool web https://example.com --download dist/
+  re-tool web https://example.com --download dist/ main.js
+  re-tool web https://example.com --download dist/ --match "*.js"
   re-tool web example.com --json --out web-report.json
   re-tool web https://example.com --tui
   re-tool web https://example.com --browser
@@ -142,7 +148,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
     console.log(`re-tool ${packageVersion()}`);
     return;
   }
-  if (!command || command === "help") {
+  if (!command || command === "help" || bools.has("help") || bools.has("h")) {
     console.log(HELP);
     return;
   }
@@ -192,11 +198,7 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
   }
 }
 
-// Auto-run if executed directly as a script
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
-if (isMain) {
-  runCli().catch((err) => {
-    console.error("[re-tool] Unexpected error:", err);
-    process.exit(1);
-  });
-}
+runCli().catch((err) => {
+  console.error("[re-tool] Unexpected error:", err);
+  process.exit(1);
+});

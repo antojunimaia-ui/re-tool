@@ -9,6 +9,8 @@ export interface ParsedArgs {
 
 /** Flags that never consume the next token (purely boolean). */
 export const BOOL_FLAGS = new Set([
+  "help",
+  "h",
   "json",
   "regex",
   "r",

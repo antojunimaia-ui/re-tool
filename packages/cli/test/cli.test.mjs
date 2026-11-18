@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import http from "node:http";
+import fs from "node:fs/promises";
+import os from "node:os";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -25,6 +28,23 @@ function runCli(args, opts = {}) {
     stdout: res.stdout ?? "",
     stderr: res.stderr ?? "",
   };
+}
+
+function runCliAsync(args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const cp = spawn(process.execPath, [CLI_PATH, ...args], {
+      cwd: ROOT,
+      ...opts,
+    });
+    let stdout = "";
+    let stderr = "";
+    if (cp.stdout) cp.stdout.on("data", (d) => { stdout += d.toString(); });
+    if (cp.stderr) cp.stderr.on("data", (d) => { stderr += d.toString(); });
+    cp.on("error", reject);
+    cp.on("close", (status) => {
+      resolve({ status, stdout, stderr });
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -87,7 +107,7 @@ test("CLI: prints version with code 0 on 'version' or '-v'", () => {
   assert.match(res2.stdout, /re-tool \d+\.\d+\.\d+/);
 });
 
-test("CLI: prints help with code 0 on 'help' or empty args", () => {
+test("CLI: prints help with code 0 on 'help', '--help', '-h' or empty args", () => {
   const res1 = runCli(["help"]);
   assert.equal(res1.status, 0);
   assert.match(res1.stdout, /Commands:/);
@@ -96,6 +116,18 @@ test("CLI: prints help with code 0 on 'help' or empty args", () => {
   const res2 = runCli([]);
   assert.equal(res2.status, 0);
   assert.match(res2.stdout, /re-tool — reverse engineering assistant/);
+
+  const res3 = runCli(["--help"]);
+  assert.equal(res3.status, 0);
+  assert.match(res3.stdout, /Commands:/);
+
+  const res4 = runCli(["-h"]);
+  assert.equal(res4.status, 0);
+  assert.match(res4.stdout, /Commands:/);
+
+  const res5 = runCli(["search", "--help"]);
+  assert.equal(res5.status, 0);
+  assert.match(res5.stdout, /Commands:/);
 });
 
 test("CLI: exits with code 2 on unknown command", () => {
@@ -174,4 +206,47 @@ test("CLI: doctor produces diagnostic JSON", () => {
   const doc = JSON.parse(res.stdout);
   assert.equal(doc.schema, "re-tool/doctor@1");
   assert.ok(doc.node.version);
+});
+
+test("CLI: web with --download saves discovered files to directory", async () => {
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url ?? "/", "http://127.0.0.1");
+    if (u.pathname === "/robots.txt") {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.end("User-agent: *\nAllow: /\n");
+      return;
+    }
+    if (u.pathname === "/bundle.js") {
+      res.writeHead(200, { "content-type": "application/javascript" });
+      res.end("console.log('downloaded bundle');");
+      return;
+    }
+    if (u.pathname === "/") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end("<html><head><script src=\"/bundle.js\"></script></head><body>OK</body></html>");
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  const url = `http://127.0.0.1:${port}/`;
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-web-download-"));
+
+  try {
+    const res = await runCliAsync(["web", url, "--download", tmpDir]);
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /Downloaded \d+ file\(s\)/);
+
+    const html = await fs.readFile(path.join(tmpDir, "index.html"), "utf8");
+    assert.match(html, /bundle\.js/);
+
+    const bundle = await fs.readFile(path.join(tmpDir, "bundle.js"), "utf8");
+    assert.equal(bundle, "console.log('downloaded bundle');");
+  } finally {
+    server.close();
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
 });

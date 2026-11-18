@@ -257,6 +257,10 @@ function webAnalysisOptions(
   minLength: number,
   limit: number,
 ): AnalyzeWebOptions {
+  const downloadDir = optValue(args.options, "download", "d");
+  const matchPattern = optValue(args.options, "match", "m");
+  const specificPaths = args.positional.slice(2);
+
   return {
     minLength,
     limit,
@@ -286,6 +290,9 @@ function webAnalysisOptions(
       "Challenge wait",
     ),
     allowChallenge: hasFlag(args.bools, args.options, "allow-challenge"),
+    download: downloadDir ? resolveTarget(downloadDir) : undefined,
+    downloadPaths: specificPaths.length > 0 ? specificPaths : undefined,
+    downloadMatch: matchPattern,
   };
 }
 
@@ -509,6 +516,19 @@ export async function cmdWeb(args: ParsedArgs): Promise<void> {
 
   if (withTui || preview) {
     await openReport(report as unknown as Record<string, unknown>, engine, preview);
+    return;
+  }
+
+  if (report.download) {
+    const d = report.download;
+    const downloadDir = optValue(args.options, "download", "d") ?? "out";
+    console.log(
+      `[re-tool] Downloaded ${d.downloaded} file(s) (${formatBytes(d.bytes)}) from ${report.target} to ${downloadDir}`,
+    );
+    for (const p of d.entries) console.log(`  ${p}`);
+    if (d.skippedUnsafe > 0) {
+      console.log(`  (skipped ${d.skippedUnsafe} unsafe path(s))`);
+    }
     return;
   }
 

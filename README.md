@@ -114,6 +114,8 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--min-length <n>` | scan, web | `4` | Ignore shorter strings |
 | `--limit <n>` | scan (`750`), web (`50`) | — | Max strings in the report / per script |
 | `-o, --out <path>` | beautify, web | — | Write output to file |
+| `-d, --download <dir>` | web | — | Download discovered files (HTML, JS, CSS) to directory |
+| `-m, --match <glob>` | asar, web | — | Filter entries/files by glob pattern (e.g. `*.js`) |
 | `--scan <file>` | tui | — | Analyze then open the TUI |
 | `--web <url>` | tui | — | Analyze a live site then open the TUI |
 | `--max-scripts <n>` | web | `40` | Max scripts downloaded (`0` = no limit) |
@@ -196,6 +198,9 @@ re-tool web https://example.com
 re-tool web example.com --json --out web-report.json
 re-tool web https://example.com --tui      # open the TUI right away
 re-tool tui --web https://example.com      # equivalent
+re-tool web https://example.com --download dist/           # download all discovered files
+re-tool web https://example.com --download dist/ main.js   # download specific files
+re-tool web https://example.com --download dist/ --match "*.js" # download matching files
 re-tool web https://example.com --cookie "session=abc; theme=dark"
 ```
 

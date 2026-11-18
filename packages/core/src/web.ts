@@ -39,12 +39,19 @@ import {
   type WebKeyFinding,
   type WebFeatureFlag,
 } from "./web-findings.js";
+import {
+  downloadWebFiles,
+  type WebDownloadFile,
+  type WebDownloadSelector,
+  type WebDownloadSummary,
+} from "./web-download.js";
 
 // Re-export submodules so external imports and types remain 100% backward compatible
 export * from "./web-robots.js";
 export * from "./web-html.js";
 export * from "./web-frameworks.js";
 export * from "./web-findings.js";
+export * from "./web-download.js";
 
 export const DEFAULT_USER_AGENT =
   "re-tool/0.4.0 (+https://github.com/antojunimaia-ui/re-tool)";
@@ -105,6 +112,12 @@ export interface AnalyzeWebOptions {
   challengeWaitMs?: number;
   /** Keeps the challenge page in the report instead of failing. Default: false. */
   allowChallenge?: boolean;
+  /** Directory to download discovered assets into. */
+  download?: string;
+  /** Specific paths/filenames to include in the download. */
+  downloadPaths?: string[];
+  /** Glob pattern to match paths for download (e.g. "*.js"). */
+  downloadMatch?: string;
 }
 
 export interface WebAsset {
@@ -237,6 +250,8 @@ export interface WebReport {
   /** Whether every discovered script was analyzed. */
   coverage: WebCoverage;
   summary: WebSummary;
+  /** Summary of files saved to disk when `download` option is set. */
+  download?: WebDownloadSummary;
 }
 
 // ---------------------------------------------------------------------------
@@ -929,6 +944,68 @@ export async function analyzeWeb(
       featureFlags: findings.featureFlags.length,
     },
   };
+
+  if (opts.download) {
+    const downloadableFiles: WebDownloadFile[] = [
+      {
+        path: "index.html",
+        url: page.url,
+        content: page.text,
+        type: "html",
+      },
+    ];
+
+    for (const item of fetched) {
+      if (item.text !== null) {
+        downloadableFiles.push({
+          path: pathOf(item.asset.url),
+          url: item.asset.url,
+          content: item.text,
+          type: item.asset.type,
+        });
+      }
+    }
+
+    for (let i = 0; i < inlineScripts.length; i++) {
+      const inline = inlineScripts[i];
+      downloadableFiles.push({
+        path: `inline-${i + 1}.js`,
+        url: `${page.url}#${inline.path}`,
+        content: inline.content,
+        type: "inline",
+      });
+    }
+
+    if (stylesheets.length > 0) {
+      for (const sheet of stylesheets) {
+        try {
+          const res = await fetchResource(sheet.url, {
+            timeoutMs,
+            maxBytes: maxBytesPerAsset,
+            userAgent,
+            cookie,
+            accept: "text/css,*/*;q=0.8",
+          });
+          if (res.status === 200 && res.text) {
+            downloadableFiles.push({
+              path: sheet.path,
+              url: sheet.url,
+              content: res.text,
+              type: "stylesheet",
+            });
+          }
+        } catch {
+          /* ignore failed stylesheet download */
+        }
+      }
+    }
+
+    const downloadSummary = await downloadWebFiles(downloadableFiles, opts.download, {
+      paths: opts.downloadPaths,
+      match: opts.downloadMatch,
+    });
+    report.download = downloadSummary;
+  }
 
   return report;
 }
