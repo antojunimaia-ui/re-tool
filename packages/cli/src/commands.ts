@@ -15,6 +15,10 @@ import {
   analyzeAsarApp,
   extractCaptures,
   extractAsarFiles,
+  unpackSourceMap,
+  auditTarget,
+  type AuditReport,
+  type AuditSeverity,
   analyzeWeb,
   probeBrowser,
   maskSecret,
@@ -720,5 +724,130 @@ export async function cmdBeautify(args: ParsedArgs): Promise<void> {
       `[re-tool] Warning: default parser failed; content returned unformatted.` +
         (result.error ? ` (${result.error})` : ""),
     );
+  }
+}
+
+export async function cmdUnpack(args: ParsedArgs): Promise<void> {
+  const target = args.positional[1];
+  if (!target) {
+    throw new ToolError(
+      'Usage: re-tool unpack <file.js|file.map|app.asar> [options] [files...]\nRun "re-tool help" for details.',
+    );
+  }
+
+  const resolvedTarget = resolveTarget(target);
+  const outOption = optValue(args.options, "out", "o");
+  const outDir = outOption
+    ? resolveTarget(outOption)
+    : path.resolve(process.cwd(), "unpacked");
+
+  const matchPattern = optValue(args.options, "match", "m");
+  const specificPaths = args.positional.slice(2);
+  const excludeNodeModules = hasFlag(args.bools, args.options, "no-node-modules");
+
+  const summary = await unpackSourceMap(resolvedTarget, outDir, {
+    match: matchPattern,
+    paths: specificPaths.length > 0 ? specificPaths : undefined,
+    excludeNodeModules,
+  });
+
+  if (hasFlag(args.bools, args.options, "json")) {
+    printJson(summary);
+    return;
+  }
+
+  console.log(
+    `[re-tool] Restored ${summary.filesRestored} original file(s) (${formatBytes(summary.bytes)}) from ${target} to ${outDir}`,
+  );
+  if (summary.sourceMapsFound > 0) {
+    console.log(`  Source maps discovered: ${summary.sourceMapsFound}`);
+  }
+  if (summary.skippedNodeModules > 0) {
+    console.log(`  Skipped node_modules files: ${summary.skippedNodeModules}`);
+  }
+  if (summary.skippedUnsafe > 0) {
+    console.log(`  Skipped unsafe path(s): ${summary.skippedUnsafe}`);
+  }
+
+  const maxShown = 25;
+  const shown = summary.entries.slice(0, maxShown);
+  for (const entry of shown) {
+    console.log(`  ${entry}`);
+  }
+  if (summary.entries.length > maxShown) {
+    console.log(`  ... and ${summary.entries.length - maxShown} more file(s)`);
+  }
+}
+
+export async function cmdAudit(args: ParsedArgs): Promise<void> {
+  const target = args.positional[1] ?? optValue(args.options, "file", "f");
+  if (!target) {
+    throw new ToolError(
+      'Usage: re-tool audit <file.js|app.asar|url> [options]\nRun "re-tool help" for details.',
+    );
+  }
+
+  const rawSeverity = optValue(args.options, "severity");
+  let minSeverity: AuditSeverity = "info";
+  if (rawSeverity) {
+    const s = rawSeverity.toLowerCase();
+    if (s === "critical" || s === "high" || s === "medium" || s === "low" || s === "info") {
+      minSeverity = s;
+    } else {
+      throw new ToolError(
+        `Invalid --severity: "${rawSeverity}". Must be one of: critical, high, medium, low, info.`,
+      );
+    }
+  }
+
+  const outPath = optValue(args.options, "out", "o");
+  const isWeb = /^https?:\/\//i.test(target);
+  const resolvedTarget = isWeb ? target : resolveTarget(target);
+
+  const report = await auditTarget(resolvedTarget, {
+    minSeverity,
+    webOptions: isWeb ? webAnalysisOptions(args, 4, 50) : undefined,
+  });
+
+  if (hasFlag(args.bools, args.options, "json")) {
+    printJson(report);
+    if (outPath) {
+      await writeFile(resolveTarget(outPath), JSON.stringify(report, null, 2), "utf8");
+      console.error(`[re-tool] Audit report saved to ${outPath}`);
+    }
+    return;
+  }
+
+  printAuditSummary(report);
+
+  if (outPath) {
+    await writeFile(resolveTarget(outPath), JSON.stringify(report, null, 2), "utf8");
+    console.log(`[re-tool] JSON audit report saved to ${outPath}`);
+  }
+}
+
+function printAuditSummary(report: AuditReport): void {
+  const s = report.stats;
+  console.log(
+    `[re-tool] Security audit of ${report.target} (${report.targetType}) — ${s.filesAudited} file(s) checked`,
+  );
+  console.log(
+    `Findings: ${s.totalFindings} total (${s.critical} critical, ${s.high} high, ${s.medium} medium, ${s.low} low)\n`,
+  );
+
+  if (report.findings.length === 0) {
+    console.log("  No security findings matching the criteria.");
+    return;
+  }
+
+  for (const f of report.findings) {
+    const sevLabel = `[${f.severity.toUpperCase()}]`;
+    const loc = f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : "";
+    console.log(`${sevLabel} ${f.title}${loc}`);
+    console.log(`  Description: ${f.description}`);
+    if (f.matchSnippet) {
+      console.log(`  Snippet:     ${f.matchSnippet}`);
+    }
+    console.log(`  Fix:         ${f.recommendation}\n`);
   }
 }

@@ -334,3 +334,5 @@ export * from "./obfuscators.js";
 export * from "./asar.js";
 export * from "./web.js";
 export * from "./browser.js";
+export * from "./unpack.js";
+export * from "./audit.js";

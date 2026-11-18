@@ -89,6 +89,8 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `scan <file>` | Analysis pipeline: format, strings, summary → JSON (accepts `.asar`) |
 | `web <url>` | Analyzes a live site (HTML + bundles): frameworks, endpoints, routes, keys, flags |
 | `asar <file>` | Lists the contents of an `.asar` file (Electron) |
+| `unpack <file>` | Reconstructs original source tree from source maps (`.js`, `.map`, `.asar`) |
+| `audit <target>` | Security and attack surface audit (`.asar`, `.js`, live URLs) |
 | `tui` | Navigate a report interactively (JSON file, `--scan` or `--web`) |
 | `beautify <file>` | Reformat/de-minify code |
 | `pos <offset>` | Show a content window around an offset |
@@ -113,9 +115,11 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `-s, --size <n>` | line | `400` | Line truncation |
 | `--min-length <n>` | scan, web | `4` | Ignore shorter strings |
 | `--limit <n>` | scan (`750`), web (`50`) | — | Max strings in the report / per script |
-| `-o, --out <path>` | beautify, web | — | Write output to file |
+| `-o, --out <path>` | beautify, web, unpack, asar, audit | — | Write output to file or directory |
 | `-d, --download <dir>` | web | — | Download discovered files (HTML, JS, CSS) to directory |
-| `-m, --match <glob>` | asar, web | — | Filter entries/files by glob pattern (e.g. `*.js`) |
+| `-m, --match <glob>` | asar, web, unpack | — | Filter entries/files by glob pattern (e.g. `*.js`, `*.tsx`) |
+| `--no-node-modules` | unpack | — | Exclude third-party node_modules files from restoration |
+| `--severity <level>` | audit | `info` | Minimum severity filter (`critical`, `high`, `medium`, `low`, `info`) |
 | `--scan <file>` | tui | — | Analyze then open the TUI |
 | `--web <url>` | tui | — | Analyze a live site then open the TUI |
 | `--max-scripts <n>` | web | `40` | Max scripts downloaded (`0` = no limit) |
@@ -165,6 +169,60 @@ re-tool asar app.asar --extract --out dist/ --match "*.js"
 Extraction (`--extract`) writes entries to `--out <dir>` (created as needed).
 Unpacked entries (`.unpacked/`) and unsafe paths are skipped; pass specific
 files as trailing args or filter with `--match <glob>`.
+
+### Source map reconstruction (`re-tool unpack`)
+
+`re-tool unpack <target>` restores the **exact original developer project tree**
+from source maps (`sourcesContent`). It strips bundler schemes (`webpack:///`,
+`vite:///`, `turbopack:///`, `file:///`), normalizes namespaces, sanitizes illegal
+filesystem characters, and blocks path traversal attempts.
+
+Accepts:
+- **`.map` files directly** (standalone source map JSON)
+- **`.js` / `.mjs` / `.cjs` bundles** (with inline base64 or companion `.map` files)
+- **`.asar` archives** (scans all internal JS bundles and `.map` files inside Electron apps)
+
+```sh
+# Unpack a standalone sourcemap
+re-tool unpack bundle.js.map -o ./src
+
+# Unpack a minified JS bundle (auto-detects inline base64 or companion .map)
+re-tool unpack app.min.js -o ./src
+
+# Unpack an entire Electron app's original source code
+re-tool unpack app.asar -o ./src
+
+# Exclude third-party node_modules to keep only first-party application code
+re-tool unpack app.asar -o ./src --no-node-modules
+
+# Filter by glob pattern or specific files
+re-tool unpack bundle.js.map -o ./src --match "*.tsx"
+re-tool unpack bundle.js.map -o ./src index.ts auth.ts
+```
+
+### Security & Attack surface audit (`re-tool audit`)
+
+`re-tool audit <target>` performs static vulnerability and attack surface analysis
+across Electron packages (`.asar`), JavaScript bundles, or live websites.
+
+**What it detects**:
+- **Electron Security**: `nodeIntegration: true`, `contextIsolation: false`, `webSecurity: false`,
+  `allowRunningInsecureContent`, `enableRemoteModule`, unvalidated `shell.openExternal`, synchronous IPC (`sendSync`),
+  and `child_process` execution.
+- **Hardcoded Secrets**: AWS keys, live Stripe keys, GitHub tokens, Slack tokens/webhooks, private keys (with automatic masking).
+- **Web & DOM Risks**: `window.postMessage` handlers without `event.origin` validation, dangerous DOM sinks (`innerHTML`, `document.write`), and `eval()`.
+- **Sensitive Endpoints**: Exposed internal, admin (`/admin/`, `/internal/`, `actuator/env`, `__debug__`) routes.
+
+```sh
+# Audit an Electron app
+re-tool audit app.asar
+
+# Audit a minified JS bundle, filtering for high and critical issues only
+re-tool audit bundle.min.js --severity high
+
+# Audit a live website and output structured JSON
+re-tool audit https://example.com --json -o audit-report.json
+```
 
 ### Web targets (`re-tool/web-report@1`)
 

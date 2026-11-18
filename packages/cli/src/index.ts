@@ -13,6 +13,8 @@ import {
   cmdExtract,
   cmdScan,
   cmdAsar,
+  cmdUnpack,
+  cmdAudit,
   cmdTui,
   cmdWeb,
   cmdDoctor,
@@ -37,6 +39,8 @@ Commands:
   web <url>         Analyze a live site (HTML + JS bundles)
                     finds frameworks, endpoints, routes, keys, flags
   asar <file>       List the contents of an .asar file (Electron)
+  unpack <file>     Reconstruct original source tree from source maps (.js, .map, .asar)
+  audit <target>    Run security & attack surface audit on Electron app, JS bundle or live site
   tui              Navigate a report interactively (JSON file or --scan/--web)
   beautify <file>   Reformat (de-minify) code for reading
   pos <offset>      Show a content window around an offset
@@ -71,6 +75,18 @@ asar options:
       --match <glob>   With --extract: only matching entries (e.g. "*.js")
   -o, --out <dir>     With --extract: output directory
                       (specific files can be passed as trailing args)
+
+unpack options:
+  -o, --out <dir>      Output directory (default: ./unpacked)
+  -m, --match <glob>   Only extract matching files (e.g. "*.tsx", "src/**")
+      --no-node-modules Exclude third-party node_modules files
+      --json           Print structured JSON output
+                       (specific files can be passed as trailing args)
+
+audit options:
+      --severity <level> Minimum severity: critical, high, medium, low, info (default: info)
+      --json           Output structured JSON audit report
+  -o, --out <path>     Save the JSON audit report to a file
 
 scan options:
       --min-length <n> Ignore strings shorter than this (default: 4)
@@ -138,6 +154,12 @@ Examples:
   re-tool asar app.asar --extract --out dist/
   re-tool asar app.asar --extract --out dist/ renderer.js main.js
   re-tool asar app.asar --extract --out dist/ --match "*.js"
+  re-tool unpack bundle.min.js -o ./src
+  re-tool unpack bundle.js.map -o ./src --match "*.ts"
+  re-tool unpack app.asar -o ./src --no-node-modules
+  re-tool audit app.asar
+  re-tool audit app.bundle.js --severity high
+  re-tool audit https://example.com --json -o audit-report.json
 `;
 
 export async function runCli(argv = process.argv.slice(2)): Promise<void> {
@@ -179,6 +201,12 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
         break;
       case "asar":
         await cmdAsar(args);
+        break;
+      case "unpack":
+        await cmdUnpack(args);
+        break;
+      case "audit":
+        await cmdAudit(args);
         break;
       case "tui":
         await cmdTui(args);

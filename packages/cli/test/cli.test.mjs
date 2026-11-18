@@ -250,3 +250,120 @@ test("CLI: web with --download saves discovered files to directory", async () =>
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CLI: unpack exits with code 1 on missing target", () => {
+  const res = runCli(["unpack"]);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Usage: re-tool unpack/);
+});
+
+test("CLI: unpack restores original source files from .map to directory", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-unpack-"));
+  const outDir = path.join(tmpDir, "unpacked");
+
+  try {
+    const mapFile = path.join(tmpDir, "app.js.map");
+    const mapContent = {
+      version: 3,
+      sources: ["webpack:///src/components/Button.tsx", "webpack:///src/index.ts"],
+      sourcesContent: [
+        "export const Button = () => '<button>Click</button>';",
+        "import { Button } from './components/Button'; console.log(Button());",
+      ],
+    };
+    await fs.writeFile(mapFile, JSON.stringify(mapContent), "utf8");
+
+    const res = runCli(["unpack", mapFile, "-o", outDir]);
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /Restored 2 original file\(s\)/);
+
+    const btn = await fs.readFile(path.join(outDir, "src/components/Button.tsx"), "utf8");
+    assert.match(btn, /export const Button/);
+
+    const idx = await fs.readFile(path.join(outDir, "src/index.ts"), "utf8");
+    assert.match(idx, /import \{ Button \}/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: unpack with --json outputs structured report", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-unpack-json-"));
+  const outDir = path.join(tmpDir, "unpacked");
+
+  try {
+    const mapFile = path.join(tmpDir, "test.js.map");
+    const mapContent = {
+      version: 3,
+      sources: ["src/config.json"],
+      sourcesContent: ['{"api": "https://api.example.com"}'],
+    };
+    await fs.writeFile(mapFile, JSON.stringify(mapContent), "utf8");
+
+    const res = runCli(["unpack", mapFile, "-o", outDir, "--json"]);
+    assert.equal(res.status, 0);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.filesRestored, 1);
+    assert.equal(parsed.targetType, "map");
+    assert.deepEqual(parsed.entries, ["src/config.json"]);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: audit exits with code 1 on missing target", () => {
+  const res = runCli(["audit"]);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Usage: re-tool audit/);
+});
+
+test("CLI: audit executes on local file and prints findings", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-audit-"));
+  const appFile = path.join(tmpDir, "app.js");
+
+  try {
+    const code = `
+      const win = new BrowserWindow({
+        webPreferences: {
+          nodeIntegration: true,
+          contextIsolation: false
+        }
+      });
+      const key = "AKIA1111111111111111";
+    `;
+    await fs.writeFile(appFile, code, "utf8");
+
+    const res = runCli(["audit", appFile]);
+    assert.equal(res.status, 0);
+    assert.match(res.stdout, /Security audit of/);
+    assert.match(res.stdout, /\[CRITICAL\] Dangerous nodeIntegration enabled/);
+    assert.match(res.stdout, /\[CRITICAL\] contextIsolation is disabled/);
+    assert.match(res.stdout, /\[CRITICAL\] Hardcoded AWS Access Key/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: audit with --json and --out writes report", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-audit-json-"));
+  const appFile = path.join(tmpDir, "sample.js");
+  const outFile = path.join(tmpDir, "audit.json");
+
+  try {
+    const code = 'const x = { webSecurity: false };';
+    await fs.writeFile(appFile, code, "utf8");
+
+    const res = runCli(["audit", appFile, "--json", "-o", outFile]);
+    assert.equal(res.status, 0);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.schema, "re-tool/audit-report@1");
+    assert.ok(parsed.findings.some((f) => f.id === "electron-web-security-disabled"));
+
+    const saved = JSON.parse(await fs.readFile(outFile, "utf8"));
+    assert.equal(saved.schema, "re-tool/audit-report@1");
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});

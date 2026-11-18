@@ -2,6 +2,16 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 
+export interface RawSourceMap {
+  version?: number;
+  file?: string;
+  sourceRoot?: string;
+  sources?: string[];
+  sourcesContent?: (string | null)[];
+  names?: string[];
+  mappings?: string;
+}
+
 export interface SourceMapInfo {
   present: boolean;
   kind?: "inline" | "file";
@@ -15,9 +25,9 @@ export interface SourceMapInfo {
   error?: string;
 }
 
-const SOURCE_MAPPING_URL = /\/\/[#@]\s*sourceMappingURL=(\S+)/g;
+export const SOURCE_MAPPING_URL = /\/\/[#@]\s*sourceMappingURL=(\S+)/g;
 
-function findSourceMappingUrl(content: string): string | undefined {
+export function findSourceMappingUrl(content: string): string | undefined {
   let last: string | undefined;
   for (const m of content.matchAll(SOURCE_MAPPING_URL)) {
     last = m[1];
@@ -25,7 +35,7 @@ function findSourceMappingUrl(content: string): string | undefined {
   return last;
 }
 
-function decodeInlineDataUri(uri: string): string {
+export function decodeInlineDataUri(uri: string): string {
   const comma = uri.indexOf(",");
   const meta = uri.slice(5, comma); // "data:" ... ","
   const payload = uri.slice(comma + 1);
@@ -33,6 +43,30 @@ function decodeInlineDataUri(uri: string): string {
     return Buffer.from(payload, "base64").toString("utf8");
   }
   return decodeURIComponent(payload);
+}
+
+export async function loadSourceMapPayload(
+  content: string,
+  filePath?: string,
+): Promise<{ map: RawSourceMap; kind: "inline" | "file"; uri: string } | null> {
+  const uri = findSourceMappingUrl(content);
+  if (!uri) return null;
+
+  try {
+    if (uri.startsWith("data:")) {
+      const parsed = JSON.parse(decodeInlineDataUri(uri));
+      return { map: parsed as RawSourceMap, kind: "inline", uri };
+    }
+
+    if (filePath) {
+      const mapPath = path.resolve(path.dirname(filePath), uri);
+      const mapText = await readFile(mapPath, "utf8");
+      return { map: JSON.parse(mapText) as RawSourceMap, kind: "file", uri };
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 function summarizeMap(

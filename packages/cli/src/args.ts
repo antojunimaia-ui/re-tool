@@ -28,6 +28,7 @@ export const BOOL_FLAGS = new Set([
   "browser",
   "headed",
   "allow-challenge",
+  "no-node-modules",
   "version",
   "v",
 ]);
