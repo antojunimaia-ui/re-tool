@@ -21,7 +21,7 @@ re-tool-core and re-tool-tui into node_modules).
 Options:
   -o, --out <dir>      Output directory (default: .out/re-tool)
   -n, --name <name>    Package name (default: @juniormaia/re-tool)
-  -v, --version <ver>  Package version (default: 0.3.0)
+  -v, --version <ver>  Package version (default: 0.4.0)
       --build          Run "npm run build" at the repo root first
       --pack           Also create the tarball (npm pack) in --out
       --publish        Also run "npm publish" in --out
@@ -38,7 +38,7 @@ function parseArgs(argv) {
   const opts = {
     out: DEFAULT_OUT,
     name: "@juniormaia/re-tool",
-    version: "0.3.0",
+    version: "0.4.0",
     build: false,
     pack: false,
     publish: false,

@@ -340,6 +340,15 @@ test("analyzeWeb builds a full web report from HTML and bundles", async () => {
   // report hygiene: internal findings are not serialized
   assert.equal("findings" in report.files[0], false);
 
+  // coverage: every discovered script was analyzed
+  assert.equal(report.coverage.status, "complete");
+  assert.equal(report.coverage.discoveredScripts, 3);
+  assert.equal(report.coverage.analyzedScripts, 3);
+  assert.equal(report.coverage.scriptsSkipped, 0);
+  assert.equal(report.coverage.requestsFailed, 0);
+  assert.equal(report.coverage.bytesTruncated, false);
+  assert.deepEqual(report.coverage.gaps, []);
+
   const json = JSON.stringify(report);
   assert.ok(json.length > 0);
 });
@@ -406,6 +415,38 @@ test("analyzeWeb explains a 403 with actionable hints", async () => {
   await assert.rejects(
     () => analyzeWeb(`${base}/forbidden`, { timeoutMs: 5000 }),
     (err) => /HTTP 403/.test(err.message) && /--cookie/.test(err.message),
+  );
+});
+
+test("analyzeWeb reports partial coverage when max-scripts is low", async () => {
+  const report = await analyzeWeb(`${base}/`, {
+    timeoutMs: 5000,
+    maxScripts: 1,
+    ignoreRobots: true,
+  });
+
+  assert.equal(report.coverage.status, "partial");
+  // fixture: /app.js + /chunk.js + inline[1] → only 1 external analyzed
+  assert.ok(report.coverage.scriptsSkippedByLimit >= 1);
+  assert.equal(report.coverage.analyzedScripts, 2); // 1 external + inline
+  assert.ok(
+    report.coverage.gaps.some((g) => g.kind === "script-limit" && g.count >= 1),
+  );
+  const limitGap = report.coverage.gaps.find((g) => g.kind === "script-limit");
+  assert.ok(limitGap.assets.length >= 1);
+});
+
+test("analyzeWeb reports a byte-budget gap when the total limit is hit", async () => {
+  const report = await analyzeWeb(`${base}/`, {
+    timeoutMs: 5000,
+    maxTotalBytes: 1,
+    ignoreRobots: true,
+  });
+
+  assert.equal(report.coverage.status, "partial");
+  assert.ok(report.coverage.scriptsSkippedByBudget >= 1);
+  assert.ok(
+    report.coverage.gaps.some((g) => g.kind === "byte-budget"),
   );
 });
 

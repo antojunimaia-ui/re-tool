@@ -93,6 +93,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `beautify <file>` | Reformat/de-minify code |
 | `pos <offset>` | Show a content window around an offset |
 | `line <number>` | Show a specific line |
+| `doctor` | Check Node, browser, CDP and network for web capture (JSON with `--json`) |
 | `version` | Print the installed version (`-v`, `--version` also work) |
 | `help` | Full help |
 
@@ -115,9 +116,9 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `-o, --out <path>` | beautify, web | — | Write output to file |
 | `--scan <file>` | tui | — | Analyze then open the TUI |
 | `--web <url>` | tui | — | Analyze a live site then open the TUI |
-| `--max-scripts <n>` | web | `40` | Max scripts downloaded |
+| `--max-scripts <n>` | web | `40` | Max scripts downloaded (`0` = no limit) |
 | `--timeout <ms>` | web | `15000` | Per-request timeout |
-| `--user-agent <ua>` | web | `re-tool/0.3.0` | Override the User-Agent header |
+| `--user-agent <ua>` | web | `re-tool/0.4.0` | Override the User-Agent header |
 | `--cookie <header>` | web | — | Cookie header (e.g. `session=abc; theme=dark`) |
 | `--ignore-robots` | web | — | Skip the `robots.txt` check (authorized targets only) |
 | `--browser` | web | — | Capture with Chrome/Edge over CDP (executes JS, records XHR and storage) |
@@ -184,6 +185,10 @@ and reports:
 - `assets` — every discovered asset with size/status (stylesheets included)
 - `files` — per-script scan results (format, webpack, sourceMap, obfuscators, strings)
 - `storage` — cookies, `localStorage` and `sessionStorage` (browser mode only)
+- `coverage` — whether every discovered script was analyzed (`complete`/`partial`)
+  with a `gaps[]` list explaining what was skipped: `--max-scripts` limit,
+  byte-budget, truncated bodies, failed downloads or parse errors. A `partial`
+  run never claims to be a full picture of the site
 - `summary` — counts and timings
 
 ```sh
@@ -224,6 +229,23 @@ What changes in the report:
 - `endpoints` also include XHR/fetch request URLs made while loading
 - `storage` lists cookies, `localStorage` and `sessionStorage` (full values in
   JSON; masked in the CLI summary and the TUI)
+
+#### Diagnostics
+
+`re-tool doctor` checks the environment the tool depends on and prints a short
+report (JSON with `--json`):
+
+```sh
+re-tool doctor
+re-tool doctor --json
+```
+
+It verifies: Node version (a global `WebSocket` is needed for browser capture),
+a Chromium-based browser is installed and its version, that the DevTools
+Protocol actually works (it launches a real probe page headlessly), outbound
+network, and the active defaults (`--max-scripts`, byte budgets, timeout).
+Anything that is missing becomes a warning with a concrete fix, instead of a
+mysterious failure later.
 
 #### Bot challenges (Cloudflare Turnstile, DDoS-Guard…)
 

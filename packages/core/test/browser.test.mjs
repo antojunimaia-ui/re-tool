@@ -7,6 +7,7 @@ import {
   findBrowser,
   captureWithBrowser,
   detectChallenge,
+  probeBrowser,
   analyzeWeb,
 } from "../dist/index.js";
 
@@ -242,6 +243,18 @@ test(
     });
     assert.equal(report.page.capture, "browser");
     assert.equal(report.page.challenge?.kind, "cloudflare");
+  },
+);
+
+test(
+  "probeBrowser launches, inspects a page and reports version/cdpOk",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const probe = await probeBrowser({ browserPath, timeoutMs: 40000 });
+    assert.equal(probe.path, browserPath);
+    assert.ok(probe.version, "version string expected");
+    assert.equal(probe.cdpOk, true, probe.error ?? "");
+    assert.ok(probe.ms > 0);
   },
 );
 

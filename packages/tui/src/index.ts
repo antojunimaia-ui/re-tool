@@ -291,6 +291,13 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           `url ${r.target}`,
           `status ${r.page.status} · ${r.page.contentType ?? "?"} · ${r.page.bytes} bytes · ${r.summary.elapsedMs} ms`,
           `assets ${r.summary.assets} · scripts ${r.summary.scripts} · analyzed ${r.summary.scriptsAnalyzed} · jsBytes ${r.summary.jsBytes} · errors ${r.summary.fetchErrors} · skipped ${r.summary.skippedAssets ?? 0}`,
+          `coverage ${r.coverage?.status ?? "unknown"}${
+            r.coverage
+              ? ` · analyzed ${r.coverage.analyzedScripts}/${r.coverage.discoveredScripts}${
+                  r.coverage.scriptsSkipped ? ` · skipped ${r.coverage.scriptsSkipped}` : ""
+                }${r.coverage.bytesTruncated ? " · truncated" : ""}`
+              : ""
+          }`,
           `strings ${r.summary.totalStrings} · frameworks ${r.summary.frameworks} · endpoints ${r.summary.endpoints} · routes ${r.summary.routes} · keys ${r.summary.keys} · flags ${r.summary.featureFlags}`,
         ],
       },
@@ -316,6 +323,14 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           ...r.page.redirects.map((x) => `redirect: ${x.from} → ${x.to}`),
         ],
       },
+      ...(r.coverage && r.coverage.gaps.length > 0
+        ? [
+            {
+              title: `Gaps (${r.coverage.gaps.length})`,
+              lines: r.coverage.gaps.map((g) => `${g.kind} x${g.count}: ${g.message}`),
+            },
+          ]
+        : []),
       {
         title: `Frameworks (${r.frameworks.length})`,
         lines: r.frameworks.map(
@@ -497,6 +512,7 @@ function composeFrame(ctx: FrameCtx): string {
   } else if (str(report.schema) === "re-tool/web-report@1") {
     const r = report as unknown as WebReport;
     if (r.page.capture === "browser") chips.push("browser");
+    if (r.coverage?.status === "partial") chips.push("partial");
     chips.push(`${r.assets.length} assets`);
     chips.push(`${r.endpoints.length} endpoints`);
     if (r.routes.length > 0) chips.push(`${r.routes.length} routes`);

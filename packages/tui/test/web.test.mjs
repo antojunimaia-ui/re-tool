@@ -140,6 +140,61 @@ test("renderPreview: web report renders a frame", () => {
   assert.ok(frame.includes("Endpoints"));
 });
 
+test("buildSections: partial coverage adds a Gaps section and updates Summary", () => {
+  const report = webReport();
+  report.coverage = {
+    status: "partial",
+    discoveredScripts: 10,
+    analyzedScripts: 2,
+    scriptsSkipped: 8,
+    scriptsSkippedByLimit: 7,
+    scriptsSkippedByBudget: 1,
+    requestsFailed: 0,
+    bytesTruncated: true,
+    gaps: [
+      {
+        kind: "script-limit",
+        count: 7,
+        message: "7 script(s) were not analyzed because of --max-scripts 5.",
+        assets: ["https://site.test/missed.js"],
+      },
+      { kind: "truncated", count: 1, message: "1 script body was cut.", assets: [] },
+    ],
+  };
+
+  const sections = buildSections(report);
+  const summary = sections.find((s) => s.title === "Summary");
+  assert.ok(summary.lines.some((l) => l.includes("partial")));
+  assert.ok(summary.lines.some((l) => l.includes("2/10")));
+  assert.ok(summary.lines.some((l) => l.includes("truncated")));
+
+  const gaps = sections.find((s) => s.title === "Gaps (2)");
+  assert.ok(gaps, "Gaps section expected for partial coverage");
+  const text = gaps.lines.join("\n");
+  assert.ok(text.includes("script-limit x7"));
+  assert.ok(text.includes("truncated x1"));
+});
+
+test("renderPreview: partial coverage shows the partial chip", () => {
+  const report = webReport();
+  report.coverage = {
+    status: "partial",
+    discoveredScripts: 10,
+    analyzedScripts: 2,
+    scriptsSkipped: 8,
+    scriptsSkippedByLimit: 8,
+    scriptsSkippedByBudget: 0,
+    requestsFailed: 0,
+    bytesTruncated: false,
+    gaps: [
+      { kind: "script-limit", count: 8, message: "8 skipped.", assets: [] },
+    ],
+  };
+  const frame = renderPreview(report);
+  assert.ok(frame.includes("partial"));
+});
+
+
 test("buildSections: browser capture shows the mode and masked storage", () => {
   const report = webReport();
   report.page.capture = "browser";

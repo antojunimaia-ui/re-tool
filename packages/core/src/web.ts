@@ -24,6 +24,15 @@ const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const MAX_FINDING_STRINGS = 20000;
 
+/** Defaults shared by `analyzeWeb`, the CLI and `re-tool doctor`. */
+export const WEB_DEFAULTS = {
+  maxScripts: 40,
+  maxBytesPerAsset: 8 * 1024 * 1024,
+  maxTotalBytes: 32 * 1024 * 1024,
+  timeoutMs: 15000,
+  settleMs: 1200,
+} as const;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -33,7 +42,7 @@ export interface AnalyzeWebOptions {
   minLength?: number;
   /** Max strings kept per script in the report. Default: 50. */
   limit?: number;
-  /** Max scripts downloaded and analyzed. Default: 40. */
+  /** Max scripts downloaded and analyzed. Default: 40 (0 = no limit). */
   maxScripts?: number;
   /** Max bytes downloaded per asset. Default: 8 MB. */
   maxBytesPerAsset?: number;
@@ -87,8 +96,49 @@ export interface WebAsset {
   ok: boolean;
   error?: string;
   analyzed: boolean;
+  /** The body was cut short by a size cap, so findings are incomplete. */
+  truncated?: boolean;
   /** Where the body came from: browser capture or a direct HTTP fetch. */
   via?: "http" | "browser";
+}
+
+/** Why part of the target was not analyzed. */
+export type WebGapKind =
+  | "script-limit"
+  | "byte-budget"
+  | "truncated"
+  | "fetch-error"
+  | "parse-error"
+  | "challenge";
+
+export interface WebGap {
+  kind: WebGapKind;
+  /** Human-readable sentence, safe to print. */
+  message: string;
+  /** How many items this gap accounts for. */
+  count: number;
+  /** Affected asset URLs, capped to keep the report small. */
+  assets?: string[];
+}
+
+/**
+ * How complete the analysis is. `partial` means the numbers above describe
+ * only what was analyzed — never the whole target.
+ */
+export interface WebCoverage {
+  status: "complete" | "partial";
+  /** Scripts declared by the page (external + inline). */
+  discoveredScripts: number;
+  analyzedScripts: number;
+  /** Scripts dropped by `--max-scripts` or the byte budget. */
+  scriptsSkipped: number;
+  scriptsSkippedByLimit: number;
+  scriptsSkippedByBudget: number;
+  /** Scripts that could not be downloaded or parsed. */
+  requestsFailed: number;
+  /** Any body (page or asset) was cut by a size cap. */
+  bytesTruncated: boolean;
+  gaps: WebGap[];
 }
 
 export interface WebFileAnalysis {
@@ -212,6 +262,8 @@ export interface WebReport {
   featureFlags: WebFeatureFlag[];
   /** Cookies/web storage captured in `browser` mode. */
   storage?: WebStorage;
+  /** Whether every discovered script was analyzed. */
+  coverage: WebCoverage;
   summary: WebSummary;
 }
 
@@ -288,7 +340,7 @@ async function fetchResource(
   url: string,
   opts: FetchOptions = {},
 ): Promise<FetchedResource> {
-  const timeoutMs = opts.timeoutMs ?? 15000;
+  const timeoutMs = opts.timeoutMs ?? WEB_DEFAULTS.timeoutMs;
   const maxBytes = opts.maxBytes ?? 8 * 1024 * 1024;
 
   let res: Response;
@@ -1071,9 +1123,9 @@ export async function analyzeWeb(
 
   const minLength = opts.minLength ?? 4;
   const limit = Math.max(1, opts.limit ?? 50);
-  const maxScripts = opts.maxScripts ?? 40;
-  const maxBytesPerAsset = opts.maxBytesPerAsset ?? 8 * 1024 * 1024;
-  const totalLimit = opts.maxTotalBytes ?? 32 * 1024 * 1024;
+  const maxScripts = opts.maxScripts ?? WEB_DEFAULTS.maxScripts;
+  const maxBytesPerAsset = opts.maxBytesPerAsset ?? WEB_DEFAULTS.maxBytesPerAsset;
+  const totalLimit = opts.maxTotalBytes ?? WEB_DEFAULTS.maxTotalBytes;
   let byteBudget = totalLimit;
   const timeoutMs = opts.timeoutMs ?? 15000;
   const userAgent = opts.userAgent;
@@ -1212,7 +1264,9 @@ export async function analyzeWeb(
     }
   }
 
-  const scriptAssets = discovered.slice(0, maxScripts);
+  // `--max-scripts 0` means "no limit"; the default stays 40.
+  const scriptAssets = maxScripts > 0 ? discovered.slice(0, maxScripts) : discovered;
+  const skippedByLimit = discovered.length - scriptAssets.length;
 
   const inlineScripts = parsed.scripts
     .filter((s) => !s.src && s.inline && s.inline.trim() !== "")
@@ -1247,6 +1301,7 @@ export async function analyzeWeb(
         text: null as string | null,
         bytes: 0,
         status: null as number | null,
+        truncated: false,
         via: "http" as const,
       };
     }
@@ -1261,6 +1316,7 @@ export async function analyzeWeb(
         text: fromBrowser.text,
         bytes: fromBrowser.bytes,
         status: fromBrowser.status,
+        truncated: false,
         via: "browser" as const,
       };
     }
@@ -1282,6 +1338,7 @@ export async function analyzeWeb(
           text: null as string | null,
           bytes: res.bytes,
           status: res.status,
+          truncated: res.truncated,
           via: "http" as const,
         };
       }
@@ -1292,6 +1349,7 @@ export async function analyzeWeb(
         text: res.text,
         bytes: res.bytes,
         status: res.status,
+        truncated: res.truncated,
         via: "http" as const,
       };
     } catch (err) {
@@ -1302,6 +1360,7 @@ export async function analyzeWeb(
         text: null as string | null,
         bytes: 0,
         status: null as number | null,
+        truncated: false,
         via: "http" as const,
       };
     }
@@ -1311,6 +1370,11 @@ export async function analyzeWeb(
   let skippedAssets = 0;
   let jsBytes = 0;
   let scriptsAnalyzed = 0;
+  let truncatedAssets = 0;
+  const skippedByBudgetUrls: string[] = [];
+  const fetchErrorUrls: string[] = [];
+  const truncatedUrls: string[] = [];
+  const parseErrorUrls: string[] = [];
 
   for (const item of fetched) {
     const { asset } = item;
@@ -1326,17 +1390,29 @@ export async function analyzeWeb(
       ok,
       analyzed: false,
       via: item.via,
+      ...(item.truncated ? { truncated: true } : {}),
       ...(item.error ? { error: item.error } : {}),
     });
 
+    if (item.truncated) {
+      truncatedAssets++;
+      truncatedUrls.push(asset.url);
+    }
+
     if (!ok || item.text === null) {
-      if (item.skipped) skippedAssets++;
-      else fetchErrors++;
+      if (item.skipped) {
+        skippedAssets++;
+        skippedByBudgetUrls.push(asset.url);
+      } else {
+        fetchErrors++;
+        fetchErrorUrls.push(asset.url);
+      }
       continue;
     }
 
     if (jsBytes + item.bytes > totalLimit) {
       skippedAssets++;
+      skippedByBudgetUrls.push(asset.url);
       assets[assets.length - 1].error = "skipped (total byte budget reached)";
       continue;
     }
@@ -1351,6 +1427,7 @@ export async function analyzeWeb(
       minLength,
       limit,
     });
+    if (file.parseError) parseErrorUrls.push(file.path);
     files.push(toPublicFile(file));
     findingStrings.push({ path: file.path, strings: file.findings });
   }
@@ -1359,6 +1436,7 @@ export async function analyzeWeb(
   for (const inline of inlineScripts) {
     const url = `${page.url}#${inline.path}`;
     const file = await analyzeScript(inline.content, url, inline.path, { minLength, limit });
+    if (file.parseError) parseErrorUrls.push(file.path);
     files.push(toPublicFile(file));
     findingStrings.push({ path: file.path, strings: file.findings });
     scriptsAnalyzed++;
@@ -1400,6 +1478,91 @@ export async function analyzeWeb(
 
   const totalStrings = files.reduce((acc, f) => acc + f.stringTotal, 0);
 
+  // ---- Coverage: never let a bounded run look like a complete one ----
+  const discoveredScripts = discovered.length + inlineScripts.length;
+  const scriptsSkipped = skippedByLimit + skippedAssets;
+  const bytesTruncated = truncatedAssets > 0 || page.truncated === true;
+  const sample = (urls: string[]) => urls.slice(0, 20);
+  const gaps: WebGap[] = [];
+
+  if (skippedByLimit > 0) {
+    gaps.push({
+      kind: "script-limit",
+      count: skippedByLimit,
+      message:
+        `${skippedByLimit} script(s) were not analyzed because of --max-scripts ${maxScripts}. ` +
+        "Raise the limit (0 = no limit) to include them.",
+      assets: sample(discovered.slice(maxScripts).map((d) => d.url)),
+    });
+  }
+  if (skippedByBudgetUrls.length > 0) {
+    gaps.push({
+      kind: "byte-budget",
+      count: skippedByBudgetUrls.length,
+      message:
+        `${skippedByBudgetUrls.length} script(s) were skipped after the ` +
+        `${Math.round(totalLimit / (1024 * 1024))} MB total byte budget.`,
+      assets: sample(skippedByBudgetUrls),
+    });
+  }
+  if (truncatedAssets > 0) {
+    gaps.push({
+      kind: "truncated",
+      count: truncatedAssets,
+      message:
+        `${truncatedAssets} script body(ies) were cut at the per-asset size cap ` +
+        `(${Math.round(maxBytesPerAsset / (1024 * 1024))} MB); findings from them are incomplete.`,
+      assets: sample(truncatedUrls),
+    });
+  }
+  if (page.truncated) {
+    gaps.push({
+      kind: "truncated",
+      count: 1,
+      message: "The page HTML was cut at the 4 MB cap; only the first part was parsed.",
+      assets: [page.url],
+    });
+  }
+  if (fetchErrorUrls.length > 0) {
+    gaps.push({
+      kind: "fetch-error",
+      count: fetchErrorUrls.length,
+      message: `${fetchErrorUrls.length} script(s) could not be downloaded.`,
+      assets: sample(fetchErrorUrls),
+    });
+  }
+  if (parseErrorUrls.length > 0) {
+    gaps.push({
+      kind: "parse-error",
+      count: parseErrorUrls.length,
+      message:
+        `${parseErrorUrls.length} script(s) could not be parsed as JavaScript; ` +
+        "string extraction fell back to heuristics and may be incomplete.",
+      assets: sample(parseErrorUrls),
+    });
+  }
+  if (captured?.challenge) {
+    gaps.push({
+      kind: "challenge",
+      count: 1,
+      message:
+        `The page is a ${captured.challenge.kind} bot challenge, not the site; ` +
+        "findings describe the interstitial.",
+    });
+  }
+
+  const coverage: WebCoverage = {
+    status: gaps.length === 0 ? "complete" : "partial",
+    discoveredScripts,
+    analyzedScripts: scriptsAnalyzed,
+    scriptsSkipped,
+    scriptsSkippedByLimit: skippedByLimit,
+    scriptsSkippedByBudget: skippedAssets,
+    requestsFailed: fetchErrors,
+    bytesTruncated,
+    gaps,
+  };
+
   const report: WebReport = {
     schema: "re-tool/web-report@1",
     target: page.url,
@@ -1422,6 +1585,7 @@ export async function analyzeWeb(
         page.url === requested.href ? [] : [{ from: requested.href, to: page.url }],
       robots,
     },
+    coverage,
     frameworks,
     assets,
     files,

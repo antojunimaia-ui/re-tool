@@ -502,14 +502,21 @@ export async function captureWithBrowser(
     await sleep(settleMs);
 
     const evaluate = async (expression: string): Promise<unknown> => {
-      const res = await conn!.send<{
-        result?: { value?: unknown };
-        exceptionDetails?: { text?: string };
-      }>("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, timeoutMs);
-      if (res.exceptionDetails) {
-        throw new Error(res.exceptionDetails.text ?? "evaluation failed");
+      // Right after a navigation, the execution context can still be torn
+      // down; retry briefly instead of failing the whole capture.
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const res = await conn!.send<{
+          result?: { value?: unknown };
+          exceptionDetails?: { text?: string };
+        }>("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, timeoutMs);
+        if (!res.exceptionDetails) return res.result?.value;
+        const text = res.exceptionDetails.text ?? "";
+        if (!/Cannot find context|destroyed|navigated|closed/i.test(text)) {
+          throw new Error(text);
+        }
+        await sleep(100);
       }
-      return res.result?.value;
+      throw new Error("evaluation did not stabilise after navigation");
     };
 
     const finalUrl = String((await evaluate("location.href")) ?? input);
@@ -530,10 +537,17 @@ export async function captureWithBrowser(
     }
 
     const userAgent = String((await evaluate("navigator.userAgent")) ?? "");
-    const storageRaw = await evaluate(`JSON.stringify({
-      localStorage: Object.fromEntries(Object.entries(localStorage)),
-      sessionStorage: Object.fromEntries(Object.entries(sessionStorage))
-    })`);
+    const storageRaw = await evaluate(`(() => {
+      try {
+        return JSON.stringify({
+          localStorage: Object.fromEntries(Object.entries(localStorage)),
+          sessionStorage: Object.fromEntries(Object.entries(sessionStorage))
+        });
+      } catch (e) {
+        // about:blank / data: pages are opaque origins: storage is denied.
+        return JSON.stringify({ __securityError__: String(e && (e.name || e)) });
+      }
+    })()`);
 
     let local: Record<string, string> = {};
     let session: Record<string, string> = {};
@@ -623,5 +637,94 @@ export async function captureWithBrowser(
     conn?.close();
     killProcess(launched.proc);
     rmProfile(launched.profileDir);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics (used by `re-tool doctor`)
+// ---------------------------------------------------------------------------
+
+export interface BrowserProbe {
+  /** Resolved executable, or null when no browser was found. */
+  path: string | null;
+  /** Raw `--version` output, e.g. "Google Chrome 141.0.7390.66". */
+  version: string | null;
+  /** true when a page was launched and inspected over CDP. */
+  cdpOk: boolean;
+  ms: number;
+  error?: string;
+}
+
+/** Reads the browser's own version string without launching CDP. */
+export function browserVersion(browserPath: string): string | null {
+  try {
+    const res = spawnSync(browserPath, ["--version"], {
+      encoding: "utf8",
+      timeout: 8000,
+      windowsHide: true,
+    });
+    const out = `${res.stdout ?? ""} ${res.stderr ?? ""}`.trim();
+    return out === "" ? null : out.split(/\r?\n/)[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Launches the browser and inspects a local data: page over CDP, proving that
+ * the executable, the DevTools port and the WebSocket path all work. Never
+ * touches the network.
+ */
+export async function probeBrowser(
+  opts: { browserPath?: string; timeoutMs?: number } = {},
+): Promise<BrowserProbe> {
+  const started = Date.now();
+  let browserPath: string | null;
+  try {
+    browserPath = findBrowser(opts.browserPath);
+  } catch (err) {
+    return {
+      path: null,
+      version: null,
+      cdpOk: false,
+      ms: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+
+  if (!browserPath) {
+    return {
+      path: null,
+      version: null,
+      cdpOk: false,
+      ms: Date.now() - started,
+      error: "No Chromium-based browser found.",
+    };
+  }
+
+  const version = browserVersion(browserPath);
+  const timeoutMs = opts.timeoutMs ?? 20000;
+
+  try {
+    const capture = await captureWithBrowser(
+      "data:text/html,<title>re-tool doctor</title><p>cdp probe</p>",
+      { browserPath, timeoutMs, settleMs: 200 },
+    );
+    const cdpOk = /re-tool doctor/.test(capture.html);
+    return {
+      path: browserPath,
+      version,
+      cdpOk,
+      ms: Date.now() - started,
+      ...(cdpOk ? {} : { error: "The browser answered, but the probe page did not render." }),
+    };
+  } catch (err) {
+    return {
+      path: browserPath,
+      version,
+      cdpOk: false,
+      ms: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
 }

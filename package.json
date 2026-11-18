@@ -1,6 +1,6 @@
 {
   "name": "re-tool",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Reverse engineering assistant for JavaScript/Electron and live web targets",
   "private": true,
   "type": "module",

@@ -17,7 +17,9 @@ import {
   extractCaptures,
   extractAsarFiles,
   analyzeWeb,
+  probeBrowser,
   maskSecret,
+  WEB_DEFAULTS,
   type AnalyzeWebOptions,
   type WebReport,
 } from "re-tool-core";
@@ -393,17 +395,25 @@ function webAnalysisOptions(
   return {
     minLength,
     limit,
-    maxScripts: parseNonNegativeInt(optValue(args.options, "max-scripts"), 40, "Max scripts"),
+    maxScripts: parseNonNegativeInt(
+      optValue(args.options, "max-scripts"),
+      WEB_DEFAULTS.maxScripts,
+      "Max scripts",
+    ),
     timeoutMs: Math.max(
       1,
-      parseNonNegativeInt(optValue(args.options, "timeout"), 15000, "Timeout"),
+      parseNonNegativeInt(optValue(args.options, "timeout"), WEB_DEFAULTS.timeoutMs, "Timeout"),
     ),
     userAgent: optValue(args.options, "user-agent", "ua"),
     cookie: optValue(args.options, "cookie"),
     ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
     browser: hasFlag(args.bools, args.options, "browser"),
     browserPath: optValue(args.options, "browser-path"),
-    settleMs: parseNonNegativeInt(optValue(args.options, "settle"), 1200, "Settle time"),
+    settleMs: parseNonNegativeInt(
+      optValue(args.options, "settle"),
+      WEB_DEFAULTS.settleMs,
+      "Settle time",
+    ),
     headed: hasFlag(args.bools, args.options, "headed"),
     challengeWaitMs: parseNonNegativeInt(
       optValue(args.options, "challenge-wait"),
@@ -544,6 +554,21 @@ function printWebSummary(r: WebReport): void {
       r.summary.fetchErrors ? `, ${r.summary.fetchErrors} failed` : ""
     }${r.summary.skippedAssets ? `, ${r.summary.skippedAssets} skipped` : ""}) · JS ${formatBytes(r.summary.jsBytes)}`,
   );
+
+  const cov = r.coverage;
+  if (cov) {
+    console.log(
+      `  coverage: ${cov.status} — ${cov.analyzedScripts}/${cov.discoveredScripts} scripts analyzed` +
+        (cov.scriptsSkipped ? `, ${cov.scriptsSkipped} skipped` : "") +
+        (cov.requestsFailed ? `, ${cov.requestsFailed} failed` : "") +
+        (cov.bytesTruncated ? ", bodies truncated" : ""),
+    );
+    for (const gap of cov.gaps.slice(0, 6)) {
+      console.log(`    - ${gap.message}`);
+    }
+    if (cov.gaps.length > 6) console.log(`    - (+${cov.gaps.length - 6} more in --json)`);
+  }
+
   console.log(
     `  findings: ${r.summary.totalStrings} strings · ${r.summary.endpoints} endpoints · ${r.summary.routes} routes · ${r.summary.keys} keys · ${r.summary.featureFlags} flags`,
   );
@@ -630,6 +655,127 @@ async function cmdWeb(args: ParsedArgs): Promise<void> {
   }
 
   printWebSummary(report);
+}
+
+// ---------------------------------------------------------------------------
+// doctor
+// ---------------------------------------------------------------------------
+
+interface NetworkProbe {
+  checked: boolean;
+  ok: boolean;
+  host: string;
+  ms: number;
+  error?: string;
+}
+
+/** One short HTTPS request, to tell "no network" from "site blocked me". */
+async function probeNetwork(): Promise<NetworkProbe> {
+  const host = "registry.npmjs.org";
+  const started = Date.now();
+  try {
+    const res = await fetch(`https://${host}/-/ping`, {
+      signal: AbortSignal.timeout(6000),
+      headers: { "user-agent": "re-tool-doctor" },
+    });
+    await res.arrayBuffer();
+    return { checked: true, ok: res.ok, host, ms: Date.now() - started };
+  } catch (err) {
+    return {
+      checked: true,
+      ok: false,
+      host,
+      ms: Date.now() - started,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function cmdDoctor(args: ParsedArgs): Promise<void> {
+  const asJson = hasFlag(args.bools, args.options, "json");
+  const started = Date.now();
+
+  const nodeVersion = process.versions.node;
+  const nodeMajor = Number(nodeVersion.split(".")[0]);
+  const browser = await probeBrowser({ browserPath: optValue(args.options, "browser-path") });
+  const network = await probeNetwork();
+
+  const warnings: string[] = [];
+  if (!browser.path) {
+    warnings.push(
+      "No Chromium-based browser found: --browser is unavailable. Install Chrome/Edge/Chromium, set RETOOL_BROWSER, or pass --browser-path <path>.",
+    );
+  } else if (!browser.cdpOk) {
+    warnings.push(`Browser found but the CDP probe failed: ${browser.error ?? "unknown error"}.`);
+  }
+  if (nodeMajor < 22) {
+    warnings.push(
+      `Node ${nodeVersion} has no global WebSocket: --browser needs Node >= 22.`,
+    );
+  }
+  if (!network.ok) {
+    warnings.push(
+      `Network check failed (${network.error ?? "unreachable"}): web analysis needs outbound HTTPS.`,
+    );
+  }
+
+  const report = {
+    schema: "re-tool/doctor@1",
+    version: packageVersion(),
+    node: { version: nodeVersion, platform: process.platform, arch: process.arch },
+    browser: {
+      found: browser.path !== null,
+      path: browser.path,
+      version: browser.version,
+      cdpOk: browser.cdpOk,
+      ms: browser.ms,
+      ...(browser.error ? { error: browser.error } : {}),
+    },
+    network,
+    env: {
+      retoolBrowser: process.env.RETOOL_BROWSER ?? null,
+    },
+    defaults: {
+      maxScripts: WEB_DEFAULTS.maxScripts,
+      maxBytesPerAsset: WEB_DEFAULTS.maxBytesPerAsset,
+      maxTotalBytes: WEB_DEFAULTS.maxTotalBytes,
+      timeoutMs: WEB_DEFAULTS.timeoutMs,
+      settleMs: WEB_DEFAULTS.settleMs,
+    },
+    warnings,
+    elapsedMs: Date.now() - started,
+  };
+
+  if (asJson) {
+    printJson(report);
+    return;
+  }
+
+  const miles = (bytes: number) => `${Math.round(bytes / (1024 * 1024))} MB`;
+  console.log(`[re-tool] doctor — ${report.version}`);
+  console.log(`  node: ${nodeVersion} (${process.platform} ${process.arch})`);
+  console.log(
+    `  browser: ${browser.path ? (browser.version ?? browser.path) : "not found"}`,
+  );
+  if (browser.path) {
+    console.log(`    path: ${browser.path}`);
+    console.log(
+      `    cdp: ${browser.cdpOk ? "ok" : "failed"} (${browser.ms} ms)${browser.error ? ` — ${browser.error}` : ""}`,
+    );
+  }
+  console.log(
+    `  network: ${network.ok ? "ok" : "failed"} (${network.host}, ${network.ms} ms)${network.error ? ` — ${network.error}` : ""}`,
+  );
+  console.log(
+    `  defaults: max-scripts ${report.defaults.maxScripts} · ${miles(report.defaults.maxBytesPerAsset)}/asset · ${miles(report.defaults.maxTotalBytes)} total · timeout ${report.defaults.timeoutMs} ms · settle ${report.defaults.settleMs} ms`,
+  );
+  if (warnings.length) {
+    console.log("  warnings:");
+    for (const w of warnings) console.log(`    - ${w}`);
+  } else {
+    console.log("  warnings: none");
+  }
+  console.log(`  (${Date.now() - started} ms)`);
 }
 
 /**
@@ -720,6 +866,7 @@ Commands:
   beautify <file>   Reformat (de-minify) code for reading
   pos <offset>      Show a content window around an offset
   line <number>     Show a specific line of the file
+  doctor           Check Node, browser, CDP and network for web capture
   version          Print the installed version
   help             Show this help
 
@@ -759,7 +906,7 @@ web options:
   -o, --out <path>     Also write the JSON report to a file
       --min-length <n> Ignore strings shorter than this (default: 4)
       --limit <n>      Max strings per script in the report (default: 50)
-      --max-scripts <n> Max scripts downloaded (default: 40)
+      --max-scripts <n> Max scripts downloaded (default: 40; 0 = no limit)
       --timeout <ms>   Per-request timeout (default: 15000)
       --user-agent <ua> Override the User-Agent header
       --cookie <header> Cookie header sent with every request (session=abc; theme=dark)
@@ -800,6 +947,8 @@ Examples:
   re-tool web https://example.com --tui
   re-tool web https://example.com --browser
   re-tool tui --web https://example.com
+  re-tool doctor
+  re-tool doctor --json
   re-tool beautify app/bundle.js --out bundle.pretty.js
   re-tool tui report.json
   re-tool tui --scan app/bundle.js
@@ -864,6 +1013,9 @@ async function main(): Promise<void> {
         break;
       case "tui":
         await cmdTui(args);
+        break;
+      case "doctor":
+        await cmdDoctor(args);
         break;
       default:
         throw new ToolError(`Unknown command: "${command}". Use "re-tool help".`, 2);
