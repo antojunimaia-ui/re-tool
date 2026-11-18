@@ -672,14 +672,14 @@ export function renderPreview(
 }
 
 // ---------------------------------------------------------------------------
-// Loop interativo
+// Interactive loop
 // ---------------------------------------------------------------------------
 
-export * from "./opentui.js"; // motor OpenTUI (Anomaly) — requer Node >= 26.4 ou Bun
+export * from "./opentui.js"; // OpenTUI engine (Anomaly) — requires Node >= 26.4 or Bun
 
 export async function renderInteractive(report: Record<string, unknown>): Promise<void> {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    throw new Error("re-tool tui requer um terminal interativo (TTY).");
+    throw new Error("re-tool tui requires an interactive terminal (TTY).");
   }
 
   const allSections = buildSections(report);

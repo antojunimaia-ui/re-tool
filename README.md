@@ -7,7 +7,7 @@ A reverse engineering assistant for **JavaScript/Electron**.
 ```
 re-tool/
   packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, web + browser capture)
-  packages/cli/    → `re-tool` binary (search / scan / web / asar / tui / beautify / pos / line)
+  packages/cli/    → `re-tool` binary (search / extract / scan / web / asar / tui / beautify / pos / line / doctor / version)
   packages/tui/    → interactive terminal UIs (ansi + opentui engines)
   fixtures/        → demo files (webpack, obfuscated, extmap, demo-app.asar)
   scripts/         → reproducible fixture generator
@@ -318,7 +318,7 @@ re-tool tui --engine ansi --scan fixtures/webpack.min.js
 npm test
 ```
 
-Suites in `packages/core/test/` and `packages/tui/test/` (node:test, no extra deps).
+Suites in `packages/core/test/`, `packages/tui/test/` and `packages/cli/test/` (node:test, no extra deps).
 
 ## Roadmap
 
