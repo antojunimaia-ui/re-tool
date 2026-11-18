@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { writeFile, readFile, mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,8 @@ const BOOL_FLAGS = new Set([
   "browser",
   "headed",
   "allow-challenge",
+  "version",
+  "v",
 ]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -718,12 +720,14 @@ Commands:
   beautify <file>   Reformat (de-minify) code for reading
   pos <offset>      Show a content window around an offset
   line <number>     Show a specific line of the file
+  version          Print the installed version
   help             Show this help
 
 Common options:
   -f, --file <path>   Target file (default: main.js)
       --json           Structured JSON output
   -c, --context <n>   Context size (default: 400)
+  -v, --version       Print the installed version
 
 search options:
   -l, --limit <n>     Max occurrences shown (default: 5; 0 = unlimited)
@@ -806,11 +810,26 @@ Examples:
   re-tool asar app.asar --extract --out dist/ --match "*.js"
 `;
 
+/** Reads the version shipped in this package's own package.json. */
+function packageVersion(): string {
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const raw = readFileSync(path.join(here, "..", "package.json"), "utf8");
+    return String((JSON.parse(raw) as { version?: string }).version ?? "0.0.0");
+  } catch {
+    return "0.0.0";
+  }
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   const { positional, options, bools } = parseArgs(argv);
 
   const command = positional[0];
+  if (command === "version" || bools.has("version") || bools.has("v")) {
+    console.log(`re-tool ${packageVersion()}`);
+    return;
+  }
   if (!command || command === "help") {
     console.log(HELP);
     return;

@@ -93,6 +93,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `beautify <file>` | Reformat/de-minify code |
 | `pos <offset>` | Show a content window around an offset |
 | `line <number>` | Show a specific line |
+| `version` | Print the installed version (`-v`, `--version` also work) |
 | `help` | Full help |
 
 ### Options
