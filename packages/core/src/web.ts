@@ -1,11 +1,13 @@
-// Web target analysis (no browser). Fetches an HTML page, discovers its
-// scripts and bundles, runs the regular scan pipeline over each one, and
-// reports frameworks, endpoints, routes, feature flags and embedded keys.
+// Web target analysis. Fetches an HTML page (over plain HTTP, or with a real
+// headless browser over CDP when `browser` is set), discovers its scripts and
+// bundles, runs the regular scan pipeline over each one, and reports
+// frameworks, endpoints, routes, feature flags and embedded keys.
 //
 // This module is intentionally dependency-free: HTML is parsed with
 // heuristics (attribute/script/link extraction) and everything else reuses the
 // existing analysis modules.
 import { ToolError } from "./errors.js";
+import { captureWithBrowser, type BrowserCapture, type StorageItem } from "./browser.js";
 import { scanSource, type ScanReport } from "./report.js";
 import type { ExtractedString } from "./strings.js";
 import type { FormatInfo } from "./format.js";
@@ -14,7 +16,7 @@ import type { SourceMapInfo } from "./sourcemap.js";
 import type { FileSource } from "./index.js";
 
 const DEFAULT_USER_AGENT =
-  "re-tool/0.2.0 (+https://github.com/antojunimaia-ui/re-tool)";
+  "re-tool/0.3.0 (+https://github.com/antojunimaia-ui/re-tool)";
 
 // Used for a single retry when a site rejects the honest re-tool UA with
 // 403/406/429 (common with bot protection). The report records which UA won.
@@ -49,6 +51,16 @@ export interface AnalyzeWebOptions {
   maxEndpoints?: number;
   /** Max routes included in the report. Default: 300. */
   maxRoutes?: number;
+  /**
+   * Captures the page with a real (headless) browser instead of plain HTTP.
+   * Needed for sites behind JavaScript challenges and SPA-rendered apps.
+   * Default: false.
+   */
+  browser?: boolean;
+  /** Explicit browser executable for `browser` mode. */
+  browserPath?: string;
+  /** Extra wait after the load event in `browser` mode. Default: 1200. */
+  settleMs?: number;
 }
 
 export type WebAssetType =
@@ -69,6 +81,8 @@ export interface WebAsset {
   ok: boolean;
   error?: string;
   analyzed: boolean;
+  /** Where the body came from: browser capture or a direct HTTP fetch. */
+  via?: "http" | "browser";
 }
 
 export interface WebFileAnalysis {
@@ -145,8 +159,16 @@ export interface WebPageInfo {
   userAgent: string;
   /** true when the browser-like UA retry was needed to get the page. */
   userAgentFallback: boolean;
+  /** How the page HTML was obtained. */
+  capture: "http" | "browser";
   redirects: { from: string; to: string }[];
   robots: { checked: boolean; allowed: boolean; rule?: string };
+}
+
+export interface WebStorage {
+  cookies: StorageItem[];
+  localStorage: StorageItem[];
+  sessionStorage: StorageItem[];
 }
 
 export interface WebSummary {
@@ -178,6 +200,8 @@ export interface WebReport {
   routes: WebRoute[];
   keys: WebKeyFinding[];
   featureFlags: WebFeatureFlag[];
+  /** Cookies/web storage captured in `browser` mode. */
+  storage?: WebStorage;
   summary: WebSummary;
 }
 
@@ -950,6 +974,64 @@ function httpStatusHint(status: number): string {
   }
 }
 
+/**
+ * Merges XHR/fetch request URLs captured by the browser into the endpoint
+ * list. Same-origin API paths become `relative` entries (matching what the
+ * static scan reports for the same path) and cross-origin calls stay absolute.
+ */
+function withNetworkEndpoints(
+  endpoints: WebEndpoint[],
+  network: { url: string; resourceType: string }[],
+  pageUrl: string,
+  maxEndpoints: number,
+): WebEndpoint[] {
+  if (network.length === 0) return endpoints;
+
+  const byKey = new Map<string, WebEndpoint>();
+  for (const e of endpoints) byKey.set(`${e.kind}:${e.value}`, e);
+
+  let origin = "";
+  try {
+    origin = new URL(pageUrl).origin;
+  } catch {
+    /* leave empty: every request stays absolute */
+  }
+
+  const add = (kind: EndpointKind, value: string) => {
+    const key = `${kind}:${value}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.count++;
+      return;
+    }
+    byKey.set(key, { value, kind, count: 1, source: "network", line: 0 });
+  };
+
+  for (const res of network) {
+    if (res.resourceType !== "XHR" && res.resourceType !== "Fetch") continue;
+
+    let url: URL;
+    try {
+      url = new URL(res.url);
+    } catch {
+      continue;
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+    if (url.username !== "" || url.password !== "") continue;
+
+    const path = `${url.pathname}${url.search}`;
+    if (url.origin === origin && API_PATH_RE.test(path) && !ASSET_EXT_RE.test(path)) {
+      add("relative", path);
+    } else {
+      add("http", res.url);
+    }
+  }
+
+  return [...byKey.values()]
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+    .slice(0, maxEndpoints);
+}
+
 async function mapLimit<T, R>(
   items: T[],
   limit: number,
@@ -998,41 +1080,74 @@ export async function analyzeWeb(
     );
   }
 
-  const fetchPage = (ua: string) =>
-    fetchResource(requested.href, {
-      timeoutMs,
-      maxBytes: 4 * 1024 * 1024,
-      userAgent: ua,
-      cookie,
-      accept: "text/html,application/xhtml+xml,*/*;q=0.8",
-    });
+  const useBrowser = opts.browser === true;
+  let captured: BrowserCapture | null = null;
 
   let usedUserAgent = userAgent ?? DEFAULT_USER_AGENT;
   let userAgentFallback = false;
   let page: FetchedResource;
-  try {
-    page = await fetchPage(usedUserAgent);
-  } catch (err) {
-    throw err instanceof ToolError ? err : new ToolError(String(err));
-  }
 
-  // Some sites reject non-browser clients (bot protection). Unless the user
-  // chose a UA, retry once with a browser-like one and record it.
-  if (!userAgent && (page.status === 403 || page.status === 406 || page.status === 429)) {
+  if (useBrowser) {
     try {
-      const retry = await fetchPage(BROWSER_USER_AGENT);
-      if (retry.status < 400) {
-        page = retry;
-        usedUserAgent = BROWSER_USER_AGENT;
-        userAgentFallback = true;
+      captured = await captureWithBrowser(requested.href, {
+        browserPath: opts.browserPath,
+        timeoutMs: Math.max(timeoutMs, 20000),
+        settleMs: opts.settleMs,
+        maxTotalBytes: totalLimit,
+        cookie,
+        userAgent,
+      });
+    } catch (err) {
+      throw err instanceof ToolError ? err : new ToolError(String(err));
+    }
+
+    page = {
+      url: captured.url,
+      status: captured.status,
+      contentType: captured.contentType,
+      bytes: Buffer.byteLength(captured.html, "utf8"),
+      text: captured.html,
+      truncated: false,
+    };
+    usedUserAgent = captured.userAgent || BROWSER_USER_AGENT;
+  } else {
+    const fetchPage = (ua: string) =>
+      fetchResource(requested.href, {
+        timeoutMs,
+        maxBytes: 4 * 1024 * 1024,
+        userAgent: ua,
+        cookie,
+        accept: "text/html,application/xhtml+xml,*/*;q=0.8",
+      });
+
+    try {
+      page = await fetchPage(usedUserAgent);
+    } catch (err) {
+      throw err instanceof ToolError ? err : new ToolError(String(err));
+    }
+
+    // Some sites reject non-browser clients (bot protection). Unless the user
+    // chose a UA, retry once with a browser-like one and record it.
+    if (!userAgent && (page.status === 403 || page.status === 406 || page.status === 429)) {
+      try {
+        const retry = await fetchPage(BROWSER_USER_AGENT);
+        if (retry.status < 400) {
+          page = retry;
+          usedUserAgent = BROWSER_USER_AGENT;
+          userAgentFallback = true;
+        }
+      } catch {
+        /* keep the original response/hint */
       }
-    } catch {
-      /* keep the original response/hint */
     }
   }
 
   if (page.status >= 400) {
-    throw new ToolError(`HTTP ${page.status} for ${page.url}${httpStatusHint(page.status)}`);
+    throw new ToolError(
+      `HTTP ${page.status} for ${page.url}${httpStatusHint(page.status)}${
+        useBrowser ? "" : " Use --browser to execute JavaScript challenges in a real (headless) browser."
+      }`,
+    );
   }
 
   const parsed = parseHtml(page.text, page.url);
@@ -1087,6 +1202,20 @@ export async function analyzeWeb(
   const assets: WebAsset[] = [];
   const scriptTexts: string[] = [];
 
+  // Script bodies the browser already downloaded: reuse them instead of
+  // hitting the network again.
+  const capturedScripts = new Map<string, { text: string; status: number; bytes: number }>();
+  if (captured) {
+    for (const res of captured.responses) {
+      if (res.body === undefined || res.resourceType !== "Script") continue;
+      capturedScripts.set(res.url, {
+        text: res.body,
+        status: res.status,
+        bytes: Buffer.byteLength(res.body, "utf8"),
+      });
+    }
+  }
+
   const fetched = await mapLimit(scriptAssets, 4, async (asset) => {
     if (byteBudget <= 0) {
       return {
@@ -1096,6 +1225,21 @@ export async function analyzeWeb(
         text: null as string | null,
         bytes: 0,
         status: null as number | null,
+        via: "http" as const,
+      };
+    }
+
+    const fromBrowser = capturedScripts.get(asset.url);
+    if (fromBrowser) {
+      byteBudget -= fromBrowser.bytes;
+      return {
+        asset,
+        error: undefined,
+        skipped: false,
+        text: fromBrowser.text,
+        bytes: fromBrowser.bytes,
+        status: fromBrowser.status,
+        via: "browser" as const,
       };
     }
 
@@ -1116,6 +1260,7 @@ export async function analyzeWeb(
           text: null as string | null,
           bytes: res.bytes,
           status: res.status,
+          via: "http" as const,
         };
       }
       return {
@@ -1125,6 +1270,7 @@ export async function analyzeWeb(
         text: res.text,
         bytes: res.bytes,
         status: res.status,
+        via: "http" as const,
       };
     } catch (err) {
       return {
@@ -1134,6 +1280,7 @@ export async function analyzeWeb(
         text: null as string | null,
         bytes: 0,
         status: null as number | null,
+        via: "http" as const,
       };
     }
   });
@@ -1156,6 +1303,7 @@ export async function analyzeWeb(
       status: item.status,
       ok,
       analyzed: false,
+      via: item.via,
       ...(item.error ? { error: item.error } : {}),
     });
 
@@ -1213,6 +1361,15 @@ export async function analyzeWeb(
     maxRoutes: opts.maxRoutes,
   });
 
+  if (captured) {
+    findings.endpoints = withNetworkEndpoints(
+      findings.endpoints,
+      captured.responses,
+      page.url,
+      opts.maxEndpoints ?? 500,
+    );
+  }
+
   const frameworks = detectFrameworks({
     html: page.text,
     scripts: scriptTexts,
@@ -1236,6 +1393,7 @@ export async function analyzeWeb(
       baseUrl: parsed.baseUrl,
       userAgent: usedUserAgent,
       userAgentFallback,
+      capture: useBrowser ? "browser" : "http",
       redirects:
         page.url === requested.href ? [] : [{ from: requested.href, to: page.url }],
       robots,
@@ -1247,6 +1405,7 @@ export async function analyzeWeb(
     routes: findings.routes,
     keys: findings.keys,
     featureFlags: findings.featureFlags,
+    ...(captured ? { storage: captured.storage } : {}),
     summary: {
       elapsedMs: Date.now() - started,
       assets: assets.length,

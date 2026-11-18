@@ -6,7 +6,7 @@ A reverse engineering assistant for **JavaScript/Electron**.
 
 ```
 re-tool/
-  packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, web targets)
+  packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, web + browser capture)
   packages/cli/    → `re-tool` binary (search / scan / web / asar / tui / beautify / pos / line)
   packages/tui/    → interactive terminal UIs (ansi + opentui engines)
   fixtures/        → demo files (webpack, obfuscated, extmap, demo-app.asar)
@@ -57,10 +57,11 @@ re-tool search "API_[A-Z_]+" --regex --limit 20 --json
 re-tool scan sample.js
 re-tool scan fixtures/webpack.min.js --min-length 8
 
-# Analyze a live site (HTML + JS bundles, no browser)
+# Analyze a live site (HTML + JS bundles; --browser executes JavaScript)
 re-tool web https://example.com
 re-tool web example.com --json --out web-report.json
 re-tool web https://example.com --tui
+re-tool web https://example.com --browser
 
 # Reformat (de-minify) code
 re-tool beautify sample.js
@@ -115,9 +116,12 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--web <url>` | tui | — | Analyze a live site then open the TUI |
 | `--max-scripts <n>` | web | `40` | Max scripts downloaded |
 | `--timeout <ms>` | web | `15000` | Per-request timeout |
-| `--user-agent <ua>` | web | `re-tool/0.2.0` | Override the User-Agent header |
+| `--user-agent <ua>` | web | `re-tool/0.3.0` | Override the User-Agent header |
 | `--cookie <header>` | web | — | Cookie header (e.g. `session=abc; theme=dark`) |
 | `--ignore-robots` | web | — | Skip the `robots.txt` check (authorized targets only) |
+| `--browser` | web | — | Capture with headless Chrome/Edge over CDP (executes JS, records XHR and storage) |
+| `--browser-path <path>` | web | — | Explicit browser executable for `--browser` |
+| `--settle <ms>` | web | `1200` | Extra wait after load in `--browser` mode |
 | `--tui` | web | — | Open the TUI right after the analysis |
 
 Exit codes: `0` success · `1` usage/domain error · `2` unknown command.
@@ -157,23 +161,25 @@ files as trailing args or filter with `--match <glob>`.
 
 ### Web targets (`re-tool/web-report@1`)
 
-`re-tool web <url>` analyzes a live site **without a browser**. It fetches the
-HTML, resolves `<script>`, `modulepreload` and `preload as=script` assets (plus
-inline scripts), runs the same pipeline used by `scan` over each bundle, and
-reports:
+`re-tool web <url>` analyzes a live site. By default it fetches the HTML over
+plain HTTP, resolves `<script>`, `modulepreload` and `preload as=script` assets
+(plus inline scripts), runs the same pipeline used by `scan` over each bundle,
+and reports:
 
-- `page` — status, content type, title, description, generator, redirects, robots status
+- `page` — status, content type, title, description, generator, redirects, robots status, capture mode
 - `frameworks` — React/Next/Vue/Nuxt/Angular/Svelte, CMS (WordPress, Shopify…),
   analytics (GA/GTM/Segment/Sentry…), auth, captcha and bundlers, each with
   confidence and evidence
 - `endpoints` — absolute URLs (`http`/`ws`) and relative API paths found in
-  string literals (`/api/...`, GraphQL, sockets)
+  string literals (`/api/...`, GraphQL, sockets); in browser mode, XHR/fetch
+  requests made by the page are merged in
 - `routes` — SPA-looking paths (`/dashboard`, `/users/:id`, `/product/[slug]`)
 - `keys` — publishable/secret keys, Google API keys, JWTs, Sentry DSNs,
   AWS/GitHub/Slack tokens…
 - `featureFlags` — `FEATURE_*`/`ENABLE_*`/`FLAG_*` and camelCase flag names
 - `assets` — every discovered asset with size/status (stylesheets included)
 - `files` — per-script scan results (format, webpack, sourceMap, obfuscators, strings)
+- `storage` — cookies, `localStorage` and `sessionStorage` (browser mode only)
 - `summary` — counts and timings
 
 ```sh
@@ -186,21 +192,53 @@ re-tool web https://example.com --cookie "session=abc; theme=dark"
 
 If a site rejects the honest `re-tool` User-Agent with **403/406/429**, the tool
 retries **once** with a browser-like UA and records it in
-`page.userAgentFallback`. Sites behind JS challenges (Cloudflare/Vercel
-checkpoints) still need a real browser (phase 2). For pages behind a login,
-pass your own session with `--cookie`.
+`page.userAgentFallback`. For pages behind a login, pass your own session with
+`--cookie`.
+
+#### Phase 2: real browser capture (`--browser`)
+
+Sites behind JavaScript challenges (Vercel/Cloudflare checkpoints) and SPAs that
+render everything at runtime need a real browser. `--browser` drives an already
+installed Chrome/Edge/Chromium in **headless mode** over the DevTools Protocol —
+no Playwright, no extra dependency (Node's global `WebSocket` is enough):
+
+```sh
+re-tool web https://example.com --browser
+re-tool web https://example.com --browser --settle 2000       # wait longer for XHR/SPA
+re-tool web https://example.com --browser --browser-path "C:\Program Files\Google\Chrome\Application\chrome.exe"
+re-tool tui --web https://example.com --browser                # capture and open the TUI
+```
+
+What changes in the report:
+
+- `page.capture: "browser"` and the real browser `page.userAgent`
+- HTML comes from the **rendered DOM** (`document.documentElement.outerHTML`),
+  so client-rendered content and JS-injected `<script>` tags are discovered
+- script bodies already downloaded by the browser are reused (`assets[].via:
+  "browser"`) instead of being fetched again
+- `endpoints` also include XHR/fetch request URLs made while loading
+- `storage` lists cookies, `localStorage` and `sessionStorage` (full values in
+  JSON; masked in the CLI summary and the TUI)
+
+Browser discovery order: `--browser-path`, the `RETOOL_BROWSER` environment
+variable, then the usual Chrome/Edge/Chromium install locations. A temporary
+profile is used and removed afterwards; the browser window stays off-screen.
+`--cookie` values are written into that temporary profile and `--user-agent`
+overrides the browser's own UA. Authenticating a challenge is still subject to
+the site's terms — only do it for sessions you own.
 
 > **Authorized use only.** The tool respects `robots.txt` by default
 > (`--ignore-robots` overrides it) and identifies itself with a `re-tool`
-> User-Agent. Only run it against sites you own or are allowed to test. Raw
-> reports can contain live credentials — treat them as secrets.
+> User-Agent (a browser UA is used when `--browser` is enabled). Only run it
+> against sites you own or are allowed to test. Raw reports can contain live
+> credentials — treat them as secrets.
 
 ## TUI
 
 `re-tool tui <report.json>` (or `re-tool tui --scan <file>` / `re-tool tui --web <url>`)
 opens a terminal viewer:
 
-- **Left**: sections/files (Summary, Format, Webpack, SourceMap, Obfuscators, Strings — files for Electron, Summary/Page/Frameworks/Endpoints/Routes/Keys/Flags/Assets for web)
+- **Left**: sections/files (Summary, Format, Webpack, SourceMap, Obfuscators, Strings — files for Electron, Summary/Page/Frameworks/Endpoints/Routes/Keys/Flags/Storage/Assets for web)
 - **Right**: detail for the selection, scrollable
 - **Footer**: status and key hints
 
@@ -246,7 +284,8 @@ Suites in `packages/core/test/` and `packages/tui/test/` (node:test, no extra de
 - [x] **M3** — Electron: `.asar` reader + full app analysis
 - [x] **M4** — interactive TUI over the JSON model (ansi + opentui engines)
 - [x] **M5** — web targets (no browser): pages, bundles, frameworks, endpoints, routes, keys, flags
-- [ ] **Next** — browser capture (phase 2: HAR/CDP), more obfuscator profiles, JSX/Babel parsing, HTML report
+- [x] **M6** — browser capture (phase 2): headless CDP, JS challenges, rendered DOM, XHR, cookies/storage
+- [ ] **Next** — more obfuscator profiles, JSX/Babel parsing, HTML report
 
 ## License
 

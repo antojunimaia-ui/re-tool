@@ -238,6 +238,31 @@ export function getStringsForTui(
 }
 
 /** Converts a report (report@2 or electron-report@1) into sections. */
+/** Masks a short value completely; longer ones keep a hint prefix/suffix. */
+function maskStorageValue(value: string): string {
+  if (value.length <= 12) return "•".repeat(Math.min(12, Math.max(4, value.length)));
+  return maskSecret(value);
+}
+
+function storageLines(storage: WebReport["storage"]): string[] {
+  if (!storage) return [];
+  const out: string[] = [`cookies: ${storage.cookies.length}`];
+  for (const c of storage.cookies) {
+    out.push(
+      `  cookie ${c.name}${c.domain ? ` @ ${c.domain}` : ""} = ${maskStorageValue(c.value)}`,
+    );
+  }
+  out.push(`localStorage: ${storage.localStorage.length}`);
+  for (const item of storage.localStorage) {
+    out.push(`  ${item.name} = ${maskStorageValue(item.value)}`);
+  }
+  out.push(`sessionStorage: ${storage.sessionStorage.length}`);
+  for (const item of storage.sessionStorage) {
+    out.push(`  ${item.name} = ${maskStorageValue(item.value)}`);
+  }
+  return out;
+}
+
 export function buildSections(report: Record<string, unknown>): Section[] {
   if (str(report.schema) === "re-tool/electron-report@1") {
     const r = report as unknown as ElectronReport;
@@ -276,6 +301,7 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           `description: ${r.page.description ?? "—"}`,
           `generator: ${r.page.generator ?? "—"}`,
           `base: ${r.page.baseUrl}`,
+          `capture: ${r.page.capture === "browser" ? "headless browser (JS executed)" : "http"}`,
           `ua: ${r.page.userAgent ?? "—"}${r.page.userAgentFallback ? " (browser fallback)" : ""}`,
           `robots: ${r.page.robots.checked ? (r.page.robots.allowed ? "allowed" : "blocked") : "not checked"}${r.page.robots.rule ? ` (${r.page.robots.rule})` : ""}`,
           ...r.page.redirects.map((x) => `redirect: ${x.from} → ${x.to}`),
@@ -304,6 +330,18 @@ export function buildSections(report: Record<string, unknown>): Section[] {
         title: `Flags (${r.featureFlags.length})`,
         lines: r.featureFlags.map((f) => `${f.name}  ${f.source}:${f.line}`),
       },
+      ...(r.storage
+        ? [
+            {
+              title: `Storage (${
+                r.storage.cookies.length +
+                r.storage.localStorage.length +
+                r.storage.sessionStorage.length
+              })`,
+              lines: storageLines(r.storage),
+            },
+          ]
+        : []),
       {
         title: `Assets (${r.assets.length})`,
         lines: r.assets.map(
@@ -352,6 +390,7 @@ function sectionTheme(title: string): RGB {
   if (title.startsWith("Routes")) return C.warn;
   if (title.startsWith("Keys")) return C.danger;
   if (title.startsWith("Flags")) return C.good;
+  if (title.startsWith("Storage")) return C.warn;
   if (title.startsWith("Assets")) return C.dim;
   if (title.startsWith("Strings")) return C.good;
   return C.text; // files in the electron/web report
@@ -448,6 +487,7 @@ function composeFrame(ctx: FrameCtx): string {
     if (r.summary.obfuscatorFiles > 0) chips.push(`${r.summary.obfuscatorFiles} obfuscated`);
   } else if (str(report.schema) === "re-tool/web-report@1") {
     const r = report as unknown as WebReport;
+    if (r.page.capture === "browser") chips.push("browser");
     chips.push(`${r.assets.length} assets`);
     chips.push(`${r.endpoints.length} endpoints`);
     if (r.routes.length > 0) chips.push(`${r.routes.length} routes`);

@@ -18,6 +18,7 @@ import {
   extractAsarFiles,
   analyzeWeb,
   maskSecret,
+  type AnalyzeWebOptions,
   type WebReport,
 } from "re-tool-core";
 import { renderInteractive, renderPreview, renderOpenTui } from "re-tool-tui";
@@ -47,6 +48,7 @@ const BOOL_FLAGS = new Set([
   "extract",
   "ignore-robots",
   "tui",
+  "browser",
 ]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -378,6 +380,29 @@ async function cmdAsar(args: ParsedArgs): Promise<void> {
 }
 
 /** Renders a report with the selected TUI engine. */
+/** Shared option parsing for `web` and `tui --web`. */
+function webAnalysisOptions(
+  args: ParsedArgs,
+  minLength: number,
+  limit: number,
+): AnalyzeWebOptions {
+  return {
+    minLength,
+    limit,
+    maxScripts: parseNonNegativeInt(optValue(args.options, "max-scripts"), 40, "Max scripts"),
+    timeoutMs: Math.max(
+      1,
+      parseNonNegativeInt(optValue(args.options, "timeout"), 15000, "Timeout"),
+    ),
+    userAgent: optValue(args.options, "user-agent", "ua"),
+    cookie: optValue(args.options, "cookie"),
+    ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
+    browser: hasFlag(args.bools, args.options, "browser"),
+    browserPath: optValue(args.options, "browser-path"),
+    settleMs: parseNonNegativeInt(optValue(args.options, "settle"), 1200, "Settle time"),
+  };
+}
+
 async function openReport(
   report: Record<string, unknown>,
   engine: string,
@@ -431,18 +456,7 @@ async function cmdTui(args: ParsedArgs): Promise<void> {
 
   if (webTarget) {
     const webLimit = args.options.has("limit") ? limit : 50;
-    report = await analyzeWeb(webTarget, {
-      minLength,
-      limit: webLimit,
-      maxScripts: parseNonNegativeInt(optValue(args.options, "max-scripts"), 40, "Max scripts"),
-      timeoutMs: Math.max(
-        1,
-        parseNonNegativeInt(optValue(args.options, "timeout"), 15000, "Timeout"),
-      ),
-      userAgent: optValue(args.options, "user-agent", "ua"),
-      cookie: optValue(args.options, "cookie"),
-      ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
-    });
+    report = await analyzeWeb(webTarget, webAnalysisOptions(args, minLength, webLimit));
   } else if (scanTarget) {
     const targetFile = resolveTarget(scanTarget);
     report = /\.asar$/i.test(targetFile)
@@ -479,6 +493,9 @@ function printWebSummary(r: WebReport): void {
     `[re-tool] web ${r.target} — ${r.page.status} ${r.page.contentType ?? "?"} (${formatBytes(r.page.bytes)}) in ${r.summary.elapsedMs} ms`,
   );
   if (r.page.title) console.log(`  title: ${r.page.title}`);
+  if (r.page.capture === "browser") {
+    console.log("  capture: headless browser (JavaScript executed, network captured)");
+  }
   if (r.page.userAgentFallback) {
     console.log("  ua: retried with a browser-like User-Agent (site rejected re-tool UA)");
   }
@@ -508,6 +525,23 @@ function printWebSummary(r: WebReport): void {
   console.log(
     `  findings: ${r.summary.totalStrings} strings · ${r.summary.endpoints} endpoints · ${r.summary.routes} routes · ${r.summary.keys} keys · ${r.summary.featureFlags} flags`,
   );
+
+  if (r.storage) {
+    const s = r.storage;
+    console.log(
+      `  storage: ${s.cookies.length} cookies · ${s.localStorage.length} localStorage · ${s.sessionStorage.length} sessionStorage`,
+    );
+    for (const item of [...s.localStorage, ...s.sessionStorage].slice(0, 5)) {
+      console.log(
+        `    ${item.name} = ${
+          item.value.length <= 12 ? "•".repeat(Math.min(12, Math.max(4, item.value.length))) : maskSecret(item.value)
+        }`,
+      );
+    }
+    if (s.localStorage.length + s.sessionStorage.length > 5) {
+      console.log("    (full values in --json)");
+    }
+  }
 
   if (r.keys.length) {
     console.log("  keys:");
@@ -544,11 +578,6 @@ async function cmdWeb(args: ParsedArgs): Promise<void> {
 
   const minLength = parseNonNegativeInt(optValue(args.options, "min-length"), 4, "Minimum length");
   const limit = parseNonNegativeInt(optValue(args.options, "limit"), 50, "Limit");
-  const maxScripts = parseNonNegativeInt(optValue(args.options, "max-scripts"), 40, "Max scripts");
-  const timeoutMs = Math.max(
-    1,
-    parseNonNegativeInt(optValue(args.options, "timeout"), 15000, "Timeout"),
-  );
 
   const asJson = hasFlag(args.bools, args.options, "json");
   const withTui = hasFlag(args.bools, args.options, "tui");
@@ -558,15 +587,7 @@ async function cmdWeb(args: ParsedArgs): Promise<void> {
     throw new ToolError(`Unknown engine: "${engine}" (use ansi | opentui)`);
   }
 
-  const report = await analyzeWeb(target, {
-    minLength,
-    limit,
-    maxScripts,
-    timeoutMs,
-    userAgent: optValue(args.options, "user-agent", "ua"),
-    cookie: optValue(args.options, "cookie"),
-    ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
-  });
+  const report = await analyzeWeb(target, webAnalysisOptions(args, minLength, limit));
 
   const outPath = optValue(args.options, "out", "o");
   if (outPath) {
@@ -719,6 +740,10 @@ web options:
       --user-agent <ua> Override the User-Agent header
       --cookie <header> Cookie header sent with every request (session=abc; theme=dark)
       --ignore-robots  Skip the robots.txt check (only on authorized targets)
+      --browser        Capture with a headless Chrome/Edge (executes JS, gets past
+                       JS challenges; also captures XHR, cookies and storage)
+      --browser-path <path> Explicit browser executable for --browser
+      --settle <ms>    Extra wait after load in --browser mode (default: 1200)
       --tui            Open the TUI right after the analysis
       --preview        Print a static TUI frame
       --engine <name>  TUI engine: ansi (default) | opentui
@@ -729,7 +754,8 @@ beautify options:
 tui options:
       --scan <file>    Run analysis and open the TUI directly
       --web <url>      Analyze a live site and open the TUI directly
-                       (accepts --user-agent, --cookie, --ignore-robots, --max-scripts, --timeout)
+                       (accepts --user-agent, --cookie, --ignore-robots, --browser,
+                        --browser-path, --settle, --max-scripts, --timeout)
       --preview        Print a static frame (no interaction; ansi engine only)
       --engine <name>  Engine: ansi (default) | opentui (needs Node >= 26.4 or Bun)
       --min-length <n> (with --scan/--web) Ignore shorter strings
@@ -743,6 +769,7 @@ Examples:
   re-tool web https://example.com
   re-tool web example.com --json --out web-report.json
   re-tool web https://example.com --tui
+  re-tool web https://example.com --browser
   re-tool tui --web https://example.com
   re-tool beautify app/bundle.js --out bundle.pretty.js
   re-tool tui report.json

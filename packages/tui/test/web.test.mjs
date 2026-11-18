@@ -139,3 +139,26 @@ test("renderPreview: web report renders a frame", () => {
   assert.ok(frame.includes("re-tool/web-report@1"));
   assert.ok(frame.includes("Endpoints"));
 });
+
+test("buildSections: browser capture shows the mode and masked storage", () => {
+  const report = webReport();
+  report.page.capture = "browser";
+  report.page.userAgent = "Mozilla/5.0 Chrome/131.0.0.0";
+  report.storage = {
+    cookies: [{ name: "sid", value: "supersecretcookievalue", domain: "site.test" }],
+    localStorage: [{ name: "token", value: "local-secret-123" }],
+    sessionStorage: [{ name: "mode", value: "beta" }],
+  };
+
+  const sections = buildSections(report);
+  const page = sections.find((s) => s.title === "Page");
+  assert.ok(page.lines.some((l) => l.includes("capture: headless browser")));
+
+  const storage = sections.find((s) => s.title.startsWith("Storage"));
+  assert.ok(storage);
+  const text = storage.lines.join("\n");
+  assert.ok(text.includes("cookie sid"));
+  assert.ok(text.includes("localStorage: 1"));
+  assert.ok(!text.includes("supersecretcookievalue"));
+  assert.ok(!text.includes("local-secret-123"));
+});
