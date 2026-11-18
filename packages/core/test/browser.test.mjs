@@ -6,6 +6,7 @@ import {
   ToolError,
   findBrowser,
   captureWithBrowser,
+  detectChallenge,
   analyzeWeb,
 } from "../dist/index.js";
 
@@ -87,6 +88,13 @@ test.before(async () => {
         return;
       }
       return html(PAGE);
+    }
+    if (url.pathname === "/challenge") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(
+        "<!doctype html><html><head><title>Just a moment...</title></head><body>Checking your browser…</body></html>",
+      );
+      return;
     }
     if (url.pathname === "/app.js") return js(APP_JS);
     if (url.pathname === "/dynamic.js") return js(DYNAMIC_JS);
@@ -186,6 +194,57 @@ test(
   },
 );
 
+test("detectChallenge spots interstitials and ignores embedded widgets", () => {
+  assert.equal(detectChallenge("<title>Just a moment...</title>")?.kind, "cloudflare");
+  assert.equal(
+    detectChallenge('<script>window._cf_chl_opt = {};</script>')?.kind,
+    "cloudflare",
+  );
+  assert.equal(detectChallenge("<title>DDoS-Guard</title>")?.kind, "ddos-guard");
+  assert.equal(
+    detectChallenge('<title>Checking your browser before accessing</title>')?.kind,
+    "challenge",
+  );
+  // A site that merely embeds Turnstile in a login form is not a challenge.
+  assert.equal(
+    detectChallenge(
+      '<title>Sign in</title><div class="cf-turnstile" data-sitekey="x"></div>',
+    ),
+    null,
+  );
+  assert.equal(detectChallenge("<title>Acme Shop</title><body>hello</body>"), null);
+});
+
+test(
+  "analyzeWeb refuses to report a challenge page (with --allow-challenge opt-in)",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const capture = await captureWithBrowser(`${base}/challenge`, {
+      browserPath,
+      timeoutMs: 40000,
+    });
+    assert.equal(capture.challenge?.kind, "cloudflare");
+
+    await assert.rejects(
+      () => analyzeWeb(`${base}/challenge`, { browser: true, browserPath, timeoutMs: 40000 }),
+      (err) =>
+        err instanceof ToolError &&
+        /bot challenge/.test(err.message) &&
+        /--headed/.test(err.message) &&
+        /--allow-challenge/.test(err.message),
+    );
+
+    const report = await analyzeWeb(`${base}/challenge`, {
+      browser: true,
+      browserPath,
+      timeoutMs: 40000,
+      allowChallenge: true,
+    });
+    assert.equal(report.page.capture, "browser");
+    assert.equal(report.page.challenge?.kind, "cloudflare");
+  },
+);
+
 test(
   "analyzeWeb with browser capture handles a bot-protected SPA",
   { skip: skipBrowser, timeout: 120_000 },
@@ -205,6 +264,7 @@ test(
 
     assert.equal(report.page.status, 200);
     assert.equal(report.page.capture, "browser");
+    assert.equal(report.page.headed, false);
     assert.equal(report.page.title, "Ready spa");
     assert.match(report.page.userAgent, /Chrome|Chromium|Headless/);
 

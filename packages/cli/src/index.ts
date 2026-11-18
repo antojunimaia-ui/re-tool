@@ -49,6 +49,8 @@ const BOOL_FLAGS = new Set([
   "ignore-robots",
   "tui",
   "browser",
+  "headed",
+  "allow-challenge",
 ]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -400,6 +402,13 @@ function webAnalysisOptions(
     browser: hasFlag(args.bools, args.options, "browser"),
     browserPath: optValue(args.options, "browser-path"),
     settleMs: parseNonNegativeInt(optValue(args.options, "settle"), 1200, "Settle time"),
+    headed: hasFlag(args.bools, args.options, "headed"),
+    challengeWaitMs: parseNonNegativeInt(
+      optValue(args.options, "challenge-wait"),
+      hasFlag(args.bools, args.options, "headed") ? 15000 : 0,
+      "Challenge wait",
+    ),
+    allowChallenge: hasFlag(args.bools, args.options, "allow-challenge"),
   };
 }
 
@@ -494,7 +503,18 @@ function printWebSummary(r: WebReport): void {
   );
   if (r.page.title) console.log(`  title: ${r.page.title}`);
   if (r.page.capture === "browser") {
-    console.log("  capture: headless browser (JavaScript executed, network captured)");
+    console.log(
+      `  capture: ${
+        r.page.headed
+          ? "browser window (JavaScript executed, network captured)"
+          : "headless browser (JavaScript executed, network captured)"
+      }`,
+    );
+  }
+  if (r.page.challenge) {
+    console.log(
+      `  challenge: ${r.page.challenge.kind} (${r.page.challenge.marker}) — this is an interstitial, not the site`,
+    );
   }
   if (r.page.userAgentFallback) {
     console.log("  ua: retried with a browser-like User-Agent (site rejected re-tool UA)");
@@ -743,7 +763,11 @@ web options:
       --browser        Capture with a headless Chrome/Edge (executes JS, gets past
                        JS challenges; also captures XHR, cookies and storage)
       --browser-path <path> Explicit browser executable for --browser
+      --headed         Show a real browser window (some challenges reject headless)
       --settle <ms>    Extra wait after load in --browser mode (default: 1200)
+      --challenge-wait <ms> Extra wait for a detected challenge to clear
+                       (default: 15000 with --headed, 0 headless)
+      --allow-challenge Keep going when the page is still a bot challenge
       --tui            Open the TUI right after the analysis
       --preview        Print a static TUI frame
       --engine <name>  TUI engine: ansi (default) | opentui
@@ -755,7 +779,8 @@ tui options:
       --scan <file>    Run analysis and open the TUI directly
       --web <url>      Analyze a live site and open the TUI directly
                        (accepts --user-agent, --cookie, --ignore-robots, --browser,
-                        --browser-path, --settle, --max-scripts, --timeout)
+                        --browser-path, --headed, --settle, --challenge-wait,
+                        --allow-challenge, --max-scripts, --timeout)
       --preview        Print a static frame (no interaction; ansi engine only)
       --engine <name>  Engine: ansi (default) | opentui (needs Node >= 26.4 or Bun)
       --min-length <n> (with --scan/--web) Ignore shorter strings

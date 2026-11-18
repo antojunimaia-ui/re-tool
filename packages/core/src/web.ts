@@ -7,7 +7,7 @@
 // heuristics (attribute/script/link extraction) and everything else reuses the
 // existing analysis modules.
 import { ToolError } from "./errors.js";
-import { captureWithBrowser, type BrowserCapture, type StorageItem } from "./browser.js";
+import { captureWithBrowser, type BrowserCapture, type ChallengeInfo, type StorageItem } from "./browser.js";
 import { scanSource, type ScanReport } from "./report.js";
 import type { ExtractedString } from "./strings.js";
 import type { FormatInfo } from "./format.js";
@@ -61,6 +61,12 @@ export interface AnalyzeWebOptions {
   browserPath?: string;
   /** Extra wait after the load event in `browser` mode. Default: 1200. */
   settleMs?: number;
+  /** Shows a real browser window instead of headless (helps with challenges). */
+  headed?: boolean;
+  /** Extra wait for a detected challenge to clear (default: 15 s when headed). */
+  challengeWaitMs?: number;
+  /** Keeps the challenge page in the report instead of failing. Default: false. */
+  allowChallenge?: boolean;
 }
 
 export type WebAssetType =
@@ -161,6 +167,10 @@ export interface WebPageInfo {
   userAgentFallback: boolean;
   /** How the page HTML was obtained. */
   capture: "http" | "browser";
+  /** In `browser` mode: whether a visible window was used. */
+  headed?: boolean;
+  /** Set when the page is a bot challenge/interstitial rather than the site. */
+  challenge?: ChallengeInfo;
   redirects: { from: string; to: string }[];
   robots: { checked: boolean; allowed: boolean; rule?: string };
 }
@@ -663,13 +673,13 @@ const SIGNATURES: Signature[] = [
   { name: "Parcel", category: "build", needles: ["parcelrequire"], strong: ["parcelrequire"] },
   { name: "Turbopack", category: "build", needles: ["turbopack"], strong: ["turbopack"] },
   { name: "WordPress", category: "cms", needles: ["wp-content", "wp-includes", "wp-json"], strong: ["wp-content", "wp-json"] },
-  { name: "Shopify", category: "cms", needles: ["cdn.shopify.com", "shopify"], strong: ["cdn.shopify.com"] },
-  { name: "Magento", category: "cms", needles: ["magento_", "mage/"], strong: ["magento_"] },
+  { name: "Shopify", category: "cms", needles: ["cdn.shopify.com", "myshopify.com", "shopifycdn.com"], strong: ["cdn.shopify.com", "myshopify.com"] },
+  { name: "Magento", category: "cms", needles: ["magento_", "mage/cookies", "/static/version"], strong: ["magento_"] },
   { name: "Drupal", category: "cms", needles: ["drupalsettings", "/sites/default/files"], strong: ["drupalsettings"] },
-  { name: "Ghost", category: "cms", needles: ["ghost-url", "ghost.org"], strong: ["ghost-url"] },
-  { name: "Webflow", category: "other", needles: ["webflow"], strong: ["webflow"] },
-  { name: "Wix", category: "other", needles: ["wixstatic", "parastorage"], strong: ["wixstatic"] },
-  { name: "Squarespace", category: "other", needles: ["squarespace"], strong: ["squarespace"] },
+  { name: "Ghost", category: "cms", needles: ["ghost-url", "/ghost/api/"], strong: ["ghost-url"] },
+  { name: "Webflow", category: "other", needles: ["assets.website-files.com", "webflow.io", "uploads-ssl.webflow.com"], strong: ["assets.website-files.com", "webflow.io"] },
+  { name: "Wix", category: "other", needles: ["wixstatic.com", "parastorage.com"], strong: ["wixstatic.com"] },
+  { name: "Squarespace", category: "other", needles: ["static1.squarespace.com", "squarespace-cdn.com"], strong: ["static1.squarespace.com"] },
   { name: "Google Analytics", category: "analytics", needles: ["googletagmanager.com/gtag", "gtag(", "google-analytics.com"], strong: ["googletagmanager.com/gtag"] },
   { name: "Google Tag Manager", category: "analytics", needles: ["googletagmanager.com/gtm", "dataLayer"], strong: ["googletagmanager.com/gtm"] },
   { name: "Segment", category: "analytics", needles: ["cdn.segment.com", "analytics.load("], strong: ["cdn.segment.com"] },
@@ -1096,9 +1106,21 @@ export async function analyzeWeb(
         maxTotalBytes: totalLimit,
         cookie,
         userAgent,
+        headed: opts.headed === true,
+        challengeWaitMs: opts.challengeWaitMs,
       });
     } catch (err) {
       throw err instanceof ToolError ? err : new ToolError(String(err));
+    }
+
+    if (captured.challenge && opts.allowChallenge !== true) {
+      throw new ToolError(
+        `The page is still a bot challenge (${captured.challenge.kind}: ${captured.challenge.marker}), not the site itself.\n` +
+          "Options:\n" +
+          '  - reuse the clearance cookie from your own browser: --cookie "cf_clearance=..."\n' +
+          "  - let the challenge run in a visible window: --headed --settle 3000\n" +
+          "  - keep the challenge page in the report anyway: --allow-challenge",
+      );
     }
 
     page = {
@@ -1394,6 +1416,8 @@ export async function analyzeWeb(
       userAgent: usedUserAgent,
       userAgentFallback,
       capture: useBrowser ? "browser" : "http",
+      ...(useBrowser ? { headed: opts.headed === true } : {}),
+      ...(captured?.challenge ? { challenge: captured.challenge } : {}),
       redirects:
         page.url === requested.href ? [] : [{ from: requested.href, to: page.url }],
       robots,

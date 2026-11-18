@@ -1,10 +1,11 @@
 // Browser capture (phase 2, no Playwright): drives an already-installed
-// Chrome/Edge/Chromium in headless mode over the DevTools Protocol.
+// Chrome/Edge/Chromium over the DevTools Protocol.
 //
 // Node's global WebSocket is enough for CDP, so this module adds no new
 // dependency. It is used by `re-tool web --browser` to get past bot challenges
 // that require executing JavaScript (Vercel/Cloudflare checkpoints), and to
-// capture XHR/fetch responses, cookies and web storage.
+// capture XHR/fetch responses, cookies and web storage. `headed: true` shows a
+// real window, which some challenges accept when headless is rejected.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
@@ -30,6 +31,21 @@ export interface BrowserCaptureOptions {
   cookie?: string;
   /** Overrides the browser User-Agent. */
   userAgent?: string;
+  /** Shows a real browser window instead of headless. Default: false. */
+  headed?: boolean;
+  /**
+   * Extra time spent waiting for a detected bot challenge to clear (polling
+   * every 500 ms). Default: 0 (headless) or 15000 (headed).
+   */
+  challengeWaitMs?: number;
+}
+
+export interface ChallengeInfo {
+  /** e.g. "cloudflare-turnstile", "cloudflare", "captcha", "firewall". */
+  kind: string;
+  /** Marker that triggered the detection. */
+  marker: string;
+  title: string | null;
 }
 
 export interface CapturedResponse {
@@ -52,6 +68,8 @@ export interface BrowserCapture {
   contentType: string | null;
   html: string;
   userAgent: string;
+  /** Set when the captured page looks like a bot challenge/interstitial. */
+  challenge?: ChallengeInfo;
   responses: CapturedResponse[];
   storage: {
     cookies: StorageItem[];
@@ -103,6 +121,64 @@ export function findBrowser(explicitPath?: string): string | null {
 
   const candidates = process.platform === "win32" ? WINDOWS_BROWSERS : UNIX_BROWSERS;
   return candidates.find((p) => p && existsSync(p)) ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Challenge detection
+// ---------------------------------------------------------------------------
+
+const CHALLENGE_TITLES: { re: RegExp; kind: string }[] = [
+  { re: /just a moment/i, kind: "cloudflare" },
+  { re: /um momento|un momento|un instant|einen moment/i, kind: "cloudflare" },
+  { re: /attention required/i, kind: "cloudflare" },
+  { re: /checking your browser|verifying you are human|verify you are human/i, kind: "challenge" },
+  { re: /ddos-guard/i, kind: "ddos-guard" },
+  { re: /please wait|please stand by/i, kind: "challenge" },
+];
+
+// Markers that only appear on interstitial/block pages (not on sites that
+// merely embed a captcha widget in a login form).
+const CHALLENGE_MARKERS: { marker: string; kind: string }[] = [
+  { marker: "cf_chl_opt", kind: "cloudflare" },
+  { marker: "/cdn-cgi/challenge-platform/h/", kind: "cloudflare" },
+  { marker: "cf-browser-verification", kind: "cloudflare" },
+  { marker: "ddos-guard", kind: "ddos-guard" },
+  { marker: "px-captcha", kind: "perimeterx" },
+  { marker: "captcha-delivery.com", kind: "datadome" },
+  { marker: "incapsula incident id", kind: "imperva" },
+  { marker: "sucuri website firewall", kind: "sucuri" },
+];
+
+/**
+ * Detects bot-challenge interstitials (Cloudflare "Just a moment…",
+ * DDoS-Guard, DataDome, Imperva…) so the caller can warn or wait instead of
+ * reporting the challenge page as if it were the site.
+ */
+export function detectChallenge(html: string, title?: string | null): ChallengeInfo | null {
+  const docTitle = (
+    title ?? /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
+
+  for (const entry of CHALLENGE_TITLES) {
+    if (docTitle && entry.re.test(docTitle)) {
+      return {
+        kind: entry.kind,
+        marker: `title: ${docTitle.slice(0, 80)}`,
+        title: docTitle,
+      };
+    }
+  }
+
+  const hay = html.toLowerCase();
+  for (const entry of CHALLENGE_MARKERS) {
+    if (hay.includes(entry.marker.toLowerCase())) {
+      return { kind: entry.kind, marker: entry.marker, title: docTitle || null };
+    }
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,28 +295,30 @@ interface LaunchedBrowser {
   port: number;
 }
 
-async function launchBrowser(browserPath: string, timeoutMs: number): Promise<LaunchedBrowser> {
+async function launchBrowser(
+  browserPath: string,
+  timeoutMs: number,
+  headed = false,
+): Promise<LaunchedBrowser> {
   const profileDir = mkdtempSync(path.join(os.tmpdir(), "re-tool-browser-"));
 
-  const proc = spawn(
-    browserPath,
-    [
-      "--headless=new",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-extensions",
-      "--disable-background-networking",
-      "--disable-sync",
-      "--mute-audio",
-      "--hide-scrollbars",
-      "--window-size=1366,900",
-      `--user-data-dir=${profileDir}`,
-      "--remote-debugging-port=0",
-      "about:blank",
-    ],
-    { stdio: "ignore", windowsHide: true },
-  );
+  const args = [
+    "--disable-gpu",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-sync",
+    "--mute-audio",
+    "--hide-scrollbars",
+    "--window-size=1366,900",
+    `--user-data-dir=${profileDir}`,
+    "--remote-debugging-port=0",
+    "about:blank",
+  ];
+  if (!headed) args.unshift("--headless=new");
+
+  const proc = spawn(browserPath, args, { stdio: "ignore", windowsHide: true });
 
   const portFile = path.join(profileDir, "DevToolsActivePort");
   const deadline = Date.now() + timeoutMs;
@@ -349,7 +427,7 @@ export async function captureWithBrowser(
     );
   }
 
-  const launched = await launchBrowser(browserPath, timeoutMs);
+  const launched = await launchBrowser(browserPath, timeoutMs, opts.headed === true);
   let conn: CdpConnection | null = null;
 
   try {
@@ -435,7 +513,22 @@ export async function captureWithBrowser(
     };
 
     const finalUrl = String((await evaluate("location.href")) ?? input);
-    const html = String((await evaluate("document.documentElement.outerHTML")) ?? "");
+
+    // Wait for a bot-challenge interstitial to clear (Cloudflare can take a
+    // few seconds even when it is going to pass).
+    const challengeWaitMs = opts.challengeWaitMs ?? (opts.headed ? 15000 : 0);
+    const challengeDeadline = Date.now() + challengeWaitMs;
+    let html = "";
+    let challenge: ChallengeInfo | null = null;
+
+    while (true) {
+      html = String((await evaluate("document.documentElement.outerHTML")) ?? "");
+      const title = await evaluate("document.title");
+      challenge = detectChallenge(html, typeof title === "string" ? title : null);
+      if (!challenge || Date.now() >= challengeDeadline) break;
+      await sleep(500);
+    }
+
     const userAgent = String((await evaluate("navigator.userAgent")) ?? "");
     const storageRaw = await evaluate(`JSON.stringify({
       localStorage: Object.fromEntries(Object.entries(localStorage)),
@@ -513,6 +606,7 @@ export async function captureWithBrowser(
       contentType: documentResponse?.mimeType ?? null,
       html,
       userAgent,
+      ...(challenge ? { challenge } : {}),
       responses: captured,
       storage: {
         cookies,

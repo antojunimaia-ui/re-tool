@@ -163,6 +163,25 @@ test("maskSecret keeps a short prefix and suffix", () => {
   assert.equal(maskSecret("short"), "shor\u2026");
 });
 
+test("detectFrameworks ignores CMS brands mentioned in page copy", () => {
+  const copy = detectFrameworks({
+    html: `<p>Works with Shopify, Webflow, Squarespace, Wix, Magento and Ghost.</p>`,
+    scripts: [],
+    urls: ["https://site.test/about"],
+  });
+  const names = copy.map((f) => f.name);
+  for (const brand of ["Shopify", "Webflow", "Squarespace", "Wix", "Magento", "Ghost"]) {
+    assert.ok(!names.includes(brand), `${brand} must not be detected from prose`);
+  }
+
+  const shop = detectFrameworks({
+    html: `<script src="https://cdn.shopify.com/s/files/theme.js"></script>`,
+    scripts: [],
+    urls: ["https://shop.example/products/x"],
+  });
+  assert.ok(shop.some((f) => f.name === "Shopify"));
+});
+
 // ---------------------------------------------------------------------------
 // End-to-end against a local server
 // ---------------------------------------------------------------------------

@@ -301,7 +301,16 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           `description: ${r.page.description ?? "—"}`,
           `generator: ${r.page.generator ?? "—"}`,
           `base: ${r.page.baseUrl}`,
-          `capture: ${r.page.capture === "browser" ? "headless browser (JS executed)" : "http"}`,
+          `capture: ${
+            r.page.capture === "browser"
+              ? r.page.headed
+                ? "browser window (JS executed)"
+                : "headless browser (JS executed)"
+              : "http"
+          }`,
+          ...(r.page.challenge
+            ? [`challenge: ${r.page.challenge.kind} (${r.page.challenge.marker})`]
+            : []),
           `ua: ${r.page.userAgent ?? "—"}${r.page.userAgentFallback ? " (browser fallback)" : ""}`,
           `robots: ${r.page.robots.checked ? (r.page.robots.allowed ? "allowed" : "blocked") : "not checked"}${r.page.robots.rule ? ` (${r.page.robots.rule})` : ""}`,
           ...r.page.redirects.map((x) => `redirect: ${x.from} → ${x.to}`),

@@ -119,9 +119,12 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--user-agent <ua>` | web | `re-tool/0.3.0` | Override the User-Agent header |
 | `--cookie <header>` | web | — | Cookie header (e.g. `session=abc; theme=dark`) |
 | `--ignore-robots` | web | — | Skip the `robots.txt` check (authorized targets only) |
-| `--browser` | web | — | Capture with headless Chrome/Edge over CDP (executes JS, records XHR and storage) |
+| `--browser` | web | — | Capture with Chrome/Edge over CDP (executes JS, records XHR and storage) |
 | `--browser-path <path>` | web | — | Explicit browser executable for `--browser` |
+| `--headed` | web | — | Show a real browser window (some challenges reject headless) |
 | `--settle <ms>` | web | `1200` | Extra wait after load in `--browser` mode |
+| `--challenge-wait <ms>` | web | `15000` headed / `0` headless | Extra wait for a detected challenge to clear |
+| `--allow-challenge` | web | — | Keep the challenge page in the report instead of failing |
 | `--tui` | web | — | Open the TUI right after the analysis |
 
 Exit codes: `0` success · `1` usage/domain error · `2` unknown command.
@@ -212,6 +215,7 @@ re-tool tui --web https://example.com --browser                # capture and ope
 What changes in the report:
 
 - `page.capture: "browser"` and the real browser `page.userAgent`
+  (`page.headed` tells whether a visible window was used)
 - HTML comes from the **rendered DOM** (`document.documentElement.outerHTML`),
   so client-rendered content and JS-injected `<script>` tags are discovered
 - script bodies already downloaded by the browser are reused (`assets[].via:
@@ -220,12 +224,29 @@ What changes in the report:
 - `storage` lists cookies, `localStorage` and `sessionStorage` (full values in
   JSON; masked in the CLI summary and the TUI)
 
+#### Bot challenges (Cloudflare Turnstile, DDoS-Guard…)
+
+A headless browser is often fingerprinted and kept on the challenge page
+(`cf_chl_opt`/`Just a moment…`). The tool detects that instead of pretending the
+interstitial is the site, and fails with guidance. A **visible window** usually
+passes the non-interactive challenge:
+
+```sh
+re-tool web https://lovable.dev/ --browser --headed --settle 3000
+re-tool tui --web https://lovable.dev/ --browser --headed
+```
+
+`--challenge-wait <ms>` controls how long to poll for the challenge to clear
+(default 15 s with `--headed`). If the site still refuses, reuse your own
+session: `--cookie "cf_clearance=..."` (copy it from your browser's devtools).
+`--allow-challenge` keeps the challenge page in the report for inspection.
+
 Browser discovery order: `--browser-path`, the `RETOOL_BROWSER` environment
 variable, then the usual Chrome/Edge/Chromium install locations. A temporary
-profile is used and removed afterwards; the browser window stays off-screen.
-`--cookie` values are written into that temporary profile and `--user-agent`
-overrides the browser's own UA. Authenticating a challenge is still subject to
-the site's terms — only do it for sessions you own.
+profile is used and removed afterwards. `--cookie` values are written into that
+temporary profile and `--user-agent` overrides the browser's own UA.
+Authenticating a challenge is still subject to the site's terms — only do it for
+sessions you own.
 
 > **Authorized use only.** The tool respects `robots.txt` by default
 > (`--ignore-robots` overrides it) and identifies itself with a `re-tool`
