@@ -4,15 +4,26 @@
   "description": "Reverse engineering assistant for JavaScript/Electron — search/extract/scan/asar/tui/beautify/pos/line",
   "author": "antojunimaia-ui",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/antojunimaia-ui/re-tool.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://github.com/antojunimaia-ui/re-tool#readme",
+  "bugs": {
+    "url": "https://github.com/antojunimaia-ui/re-tool/issues"
+  },
   "type": "module",
   "bin": {
     "re-tool": "dist/index.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepack": "node -e \"import('node:fs').then(fs => fs.copyFileSync('../../README.md', './README.md'))\"",
     "test": "node --test"
   },
   "dependencies": {
