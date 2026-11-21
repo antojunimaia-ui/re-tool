@@ -6,8 +6,8 @@ A reverse engineering assistant for **JavaScript/Electron**.
 
 ```
 re-tool/
-  packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, web + browser capture)
-  packages/cli/    → `re-tool` binary (search / extract / scan / web / asar / tui / beautify / pos / line / doctor / version)
+  packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, patch, web + browser capture)
+  packages/cli/    → `re-tool` binary (search / extract / scan / web / asar / patch / unpack / audit / tui / beautify / pos / line / doctor / version)
   packages/tui/    → interactive terminal UIs (ansi + opentui engines)
   fixtures/        → demo files (webpack, obfuscated, extmap, demo-app.asar)
   scripts/         → reproducible fixture generator
@@ -67,6 +67,12 @@ re-tool web https://example.com --browser
 re-tool beautify sample.js
 re-tool beautify app/bundle.js --out bundle.pretty.js
 
+# Modifying & recompiling Electron apps
+re-tool patch ./dist -o app.asar
+re-tool patch app.asar --replace main.js=./patched-main.js
+re-tool patch app.asar -f main.js -s "isDev = false" --replace-text "isDev = true"
+re-tool patch app.asar --remove telemetry.js
+
 # Content window around an offset / specific line
 re-tool pos 4096 --file sample.js --context 200
 re-tool line 42 --file sample.js
@@ -89,6 +95,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `scan <file>` | Analysis pipeline: format, strings, summary → JSON (accepts `.asar`) |
 | `web <url>` | Analyzes a live site (HTML + bundles): frameworks, endpoints, routes, keys, flags |
 | `asar <file>` | Lists the contents of an `.asar` file (Electron) |
+| `patch <file\|dir>` | Modify, inject into, or pack/recompile Electron `.asar` apps |
 | `unpack <file>` | Reconstructs original source tree from source maps (`.js`, `.map`, `.asar`) |
 | `audit <target>` | Security and attack surface audit (`.asar`, `.js`, live URLs) |
 | `tui` | Navigate a report interactively (JSON file, `--scan` or `--web`) |
@@ -169,6 +176,43 @@ re-tool asar app.asar --extract --out dist/ --match "*.js"
 Extraction (`--extract`) writes entries to `--out <dir>` (created as needed).
 Unpacked entries (`.unpacked/`) and unsafe paths are skipped; pass specific
 files as trailing args or filter with `--match <glob>`.
+
+### Modifying & Recompiling Electron apps (`re-tool patch`)
+
+`re-tool patch` allows modifying, injecting into, and recompiling Electron `.asar` applications quickly without requiring external tools:
+
+**Pack an extracted directory back into an `.asar`:**
+```sh
+# Recompile a directory into an ASAR archive
+re-tool patch ./dist -o app.asar
+
+# Automatically extract native addons (.node) into app.asar.unpacked/
+re-tool patch ./dist -o app.asar --unpack "*.node"
+```
+
+**Directly patch an existing `.asar` archive:**
+```sh
+# In-place patch with automatic .bak backup
+re-tool patch app.asar --replace main.js=./patched-main.js
+
+# Replace multiple files or inject new modules
+re-tool patch app.asar \
+  --replace main.js=./new-main.js \
+  --replace lib/hook.js=./hook.js
+
+# Search & replace code inside a file in the ASAR
+re-tool patch app.asar -f main.js -s "isDev = false" --replace-text "isDev = true"
+
+# Regex replacement or code injection (append/prepend)
+re-tool patch app.asar -f main.js --regex -s "DEBUG_FLAG\s*=\s*0" --replace-text "DEBUG_FLAG = 1"
+re-tool patch app.asar -f main.js --prepend "console.log('App hooked!');\n"
+
+# Remove unwanted telemetry or analytics scripts
+re-tool patch app.asar --remove telemetry.js --remove analytics.js
+
+# Save to a new file instead of modifying in-place
+re-tool patch app.asar -o patched-app.asar --no-backup
+```
 
 ### Source map reconstruction (`re-tool unpack`)
 

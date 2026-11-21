@@ -13,6 +13,7 @@ import {
   cmdExtract,
   cmdScan,
   cmdAsar,
+  cmdPatch,
   cmdUnpack,
   cmdAudit,
   cmdTui,
@@ -39,6 +40,7 @@ Commands:
   web <url>         Analyze a live site (HTML + JS bundles)
                     finds frameworks, endpoints, routes, keys, flags
   asar <file>       List the contents of an .asar file (Electron)
+  patch <file|dir>  Modify, inject into, or pack/recompile Electron .asar apps
   unpack <file>     Reconstruct original source tree from source maps (.js, .map, .asar)
   audit <target>    Run security & attack surface audit on Electron app, JS bundle or live site
   tui              Navigate a report interactively (JSON file or --scan/--web)
@@ -75,6 +77,20 @@ asar options:
       --match <glob>   With --extract: only matching entries (e.g. "*.js")
   -o, --out <dir>     With --extract: output directory
                       (specific files can be passed as trailing args)
+
+patch options:
+  -o, --out <path>     Output .asar (default: in-place overwrite for archives)
+      --no-backup      Skip creating a .bak file when patching in-place
+      --replace <a=b>  Replace entry <a> inside ASAR with local file <b> (repeatable)
+      --remove <entry> Remove entry from ASAR (repeatable)
+  -f, --file <entry>   Target entry inside ASAR for text modification
+  -s, --search <str>   Search string or regex to replace inside --file
+      --replace-text <t> Replacement text for --search
+      --append <str>   Append text to --file
+      --prepend <str>  Prepend text to --file
+      --unpack <glob>  Files to extract to <dest>.unpacked/ (e.g. "*.node")
+      --pack           Explicitly treat target as directory to pack
+      --json           Print structured JSON output
 
 unpack options:
   -o, --out <dir>      Output directory (default: ./unpacked)
@@ -154,6 +170,10 @@ Examples:
   re-tool asar app.asar --extract --out dist/
   re-tool asar app.asar --extract --out dist/ renderer.js main.js
   re-tool asar app.asar --extract --out dist/ --match "*.js"
+  re-tool patch ./dist -o app.asar
+  re-tool patch app.asar --replace main.js=./patched-main.js
+  re-tool patch app.asar -f main.js -s "isDev = false" --replace-text "isDev = true"
+  re-tool patch app.asar --remove telemetry.js
   re-tool unpack bundle.min.js -o ./src
   re-tool unpack bundle.js.map -o ./src --match "*.ts"
   re-tool unpack app.asar -o ./src --no-node-modules
@@ -163,7 +183,8 @@ Examples:
 `;
 
 export async function runCli(argv = process.argv.slice(2)): Promise<void> {
-  const { positional, options, bools } = parseArgs(argv);
+  const args = parseArgs(argv);
+  const { positional, bools } = args;
 
   const command = positional[0];
   if (command === "version" || bools.has("version") || bools.has("v")) {
@@ -175,7 +196,6 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
     return;
   }
 
-  const args: ParsedArgs = { positional, options, bools };
   try {
     switch (command) {
       case "search":
@@ -201,6 +221,9 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
         break;
       case "asar":
         await cmdAsar(args);
+        break;
+      case "patch":
+        await cmdPatch(args);
         break;
       case "unpack":
         await cmdUnpack(args);

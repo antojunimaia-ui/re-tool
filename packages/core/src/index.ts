@@ -336,3 +336,4 @@ export * from "./web.js";
 export * from "./browser.js";
 export * from "./unpack.js";
 export * from "./audit.js";
+export * from "./patch.js";

@@ -4,6 +4,7 @@ import { ToolError } from "re-tool-core";
 export interface ParsedArgs {
   positional: string[];
   options: Map<string, string>;
+  multiOptions: Map<string, string[]>;
   bools: Set<string>;
 }
 
@@ -31,14 +32,26 @@ export const BOOL_FLAGS = new Set([
   "no-node-modules",
   "version",
   "v",
+  "backup",
+  "no-backup",
+  "pack",
+  "in-place",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {
   const positional: string[] = [];
   const options = new Map<string, string>();
+  const multiOptions = new Map<string, string[]>();
   const bools = new Set<string>();
 
   const isBool = (key: string): boolean => BOOL_FLAGS.has(key);
+
+  const addOption = (key: string, val: string): void => {
+    options.set(key, val);
+    const existing = multiOptions.get(key);
+    if (existing) existing.push(val);
+    else multiOptions.set(key, [val]);
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -53,13 +66,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const key = eq !== -1 ? a.slice(2, eq) : a.slice(2);
       if (eq !== -1) {
         if (isBool(key)) bools.add(key);
-        else options.set(key, a.slice(eq + 1));
+        else addOption(key, a.slice(eq + 1));
       } else if (isBool(key)) {
         bools.add(key);
       } else {
         const next = argv[i + 1];
         if (next !== undefined && !next.startsWith("-")) {
-          options.set(key, next);
+          addOption(key, next);
           i++;
         } else {
           bools.add(key);
@@ -72,7 +85,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
       } else {
         const next = argv[i + 1];
         if (next !== undefined && !next.startsWith("-")) {
-          options.set(key, next);
+          addOption(key, next);
           i++;
         } else {
           bools.add(key);
@@ -83,7 +96,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { positional, options, bools };
+  return { positional, options, multiOptions, bools };
 }
 
 export function optValue(options: Map<string, string>, ...names: string[]): string | undefined {
@@ -92,6 +105,15 @@ export function optValue(options: Map<string, string>, ...names: string[]): stri
     if (v !== undefined) return v;
   }
   return undefined;
+}
+
+export function optValues(multiOptions: Map<string, string[]>, ...names: string[]): string[] {
+  const result: string[] = [];
+  for (const n of names) {
+    const arr = multiOptions.get(n);
+    if (arr) result.push(...arr);
+  }
+  return result;
 }
 
 export function hasFlag(bools: Set<string>, options: Map<string, string>, ...names: string[]): boolean {

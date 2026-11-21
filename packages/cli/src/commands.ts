@@ -1,4 +1,4 @@
-import { writeFile, readFile, mkdir } from "node:fs/promises";
+import { writeFile, readFile, mkdir, stat } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -15,6 +15,8 @@ import {
   analyzeAsarApp,
   extractCaptures,
   extractAsarFiles,
+  packAsar,
+  patchAsar,
   unpackSourceMap,
   auditTarget,
   type AuditReport,
@@ -30,6 +32,7 @@ import { renderInteractive, renderPreview, renderOpenTui } from "re-tool-tui";
 import {
   type ParsedArgs,
   optValue,
+  optValues,
   hasFlag,
   parseNonNegativeInt,
   DEFAULT_FILE,
@@ -849,5 +852,138 @@ function printAuditSummary(report: AuditReport): void {
       console.log(`  Snippet:     ${f.matchSnippet}`);
     }
     console.log(`  Fix:         ${f.recommendation}\n`);
+  }
+}
+
+export async function cmdPatch(args: ParsedArgs): Promise<void> {
+  const target = args.positional[1];
+  if (!target) {
+    throw new ToolError('Usage: re-tool patch <app.asar|dir> [options]  (see "re-tool help")');
+  }
+
+  const resolved = resolveTarget(target);
+  let isDirectory = false;
+  try {
+    const s = await stat(resolved);
+    isDirectory = s.isDirectory();
+  } catch {
+    throw new ToolError(`Target path not found: ${target}`);
+  }
+
+  const asJson = hasFlag(args.bools, args.options, "json");
+  const outPath = optValue(args.options, "out", "o");
+  const unpackPattern = optValue(args.options, "unpack");
+  const isExplicitPack = hasFlag(args.bools, args.options, "pack");
+
+  if (isDirectory || isExplicitPack) {
+    if (!outPath) {
+      throw new ToolError("Packing a directory requires --out <app.asar>");
+    }
+    const result = await packAsar(resolved, resolveTarget(outPath), {
+      unpack: unpackPattern,
+    });
+
+    if (asJson) {
+      printJson({ command: "patch", action: "pack", ...result });
+      return;
+    }
+
+    console.log(`[re-tool] Packed ${result.totalFiles} file(s) into ${outPath} (${formatBytes(result.totalBytes)})`);
+    if (result.unpackedFiles > 0) {
+      console.log(`  Unpacked: ${result.unpackedFiles} file(s) moved to ${result.unpackedDir}`);
+    }
+    return;
+  }
+
+  // Target is an ASAR file
+  const isNoBackup = hasFlag(args.bools, args.options, "no-backup");
+  const backup = !isNoBackup;
+
+  // Replacements: --replace entry=localFile
+  const rawReplacements = optValues(args.multiOptions, "replace");
+  const replaceFiles: Record<string, string> = {};
+  for (const r of rawReplacements) {
+    const eq = r.indexOf("=");
+    if (eq === -1) {
+      throw new ToolError(`Invalid --replace format: "${r}". Expected format: "<entryPath>=<localPath>"`);
+    }
+    const entryPath = r.slice(0, eq).trim();
+    const localPath = r.slice(eq + 1).trim();
+    replaceFiles[entryPath] = resolveTarget(localPath);
+  }
+
+  // Removals: --remove entry
+  const removeFiles = optValues(args.multiOptions, "remove");
+
+  // In-file text editing: --file, --search, --replace-text, --append, --prepend
+  const targetFileInAsar = optValue(args.options, "file", "f");
+  const searchTerm = optValue(args.options, "search", "s");
+  const replaceTextVal = optValue(args.options, "replace-text");
+  const isRegex = hasFlag(args.bools, args.options, "regex", "r");
+  const appendVal = optValue(args.options, "append");
+  const prependVal = optValue(args.options, "prepend");
+
+  const replaceTextRules = [];
+  if (searchTerm !== undefined) {
+    if (!targetFileInAsar) {
+      throw new ToolError("--search requires --file <entryPath> to specify the target file inside the ASAR");
+    }
+    if (replaceTextVal === undefined) {
+      throw new ToolError("--search requires --replace-text <text>");
+    }
+    replaceTextRules.push({
+      file: targetFileInAsar,
+      search: isRegex ? new RegExp(searchTerm, "g") : searchTerm,
+      replace: replaceTextVal,
+    });
+  }
+
+  const appendRules = [];
+  if (appendVal !== undefined) {
+    if (!targetFileInAsar) {
+      throw new ToolError("--append requires --file <entryPath>");
+    }
+    appendRules.push({ file: targetFileInAsar, content: appendVal });
+  }
+
+  const prependRules = [];
+  if (prependVal !== undefined) {
+    if (!targetFileInAsar) {
+      throw new ToolError("--prepend requires --file <entryPath>");
+    }
+    prependRules.push({ file: targetFileInAsar, content: prependVal });
+  }
+
+  const result = await patchAsar(resolved, {
+    out: outPath ? resolveTarget(outPath) : undefined,
+    backup,
+    replaceFiles: Object.keys(replaceFiles).length > 0 ? replaceFiles : undefined,
+    removeFiles: removeFiles.length > 0 ? removeFiles : undefined,
+    replaceText: replaceTextRules.length > 0 ? replaceTextRules : undefined,
+    append: appendRules.length > 0 ? appendRules : undefined,
+    prepend: prependRules.length > 0 ? prependRules : undefined,
+    unpack: unpackPattern,
+  });
+
+  if (asJson) {
+    printJson({ command: "patch", action: "patch", ...result });
+    return;
+  }
+
+  console.log(`[re-tool] Patched ${result.totalFiles} file(s) → ${result.outPath} (${formatBytes(result.totalBytes)})`);
+  if (result.backupPath) {
+    console.log(`  Backup created at: ${result.backupPath}`);
+  }
+  if (result.modified.length > 0) {
+    console.log(`  Modified (${result.modified.length}): ${result.modified.join(", ")}`);
+  }
+  if (result.added.length > 0) {
+    console.log(`  Added (${result.added.length}): ${result.added.join(", ")}`);
+  }
+  if (result.removed.length > 0) {
+    console.log(`  Removed (${result.removed.length}): ${result.removed.join(", ")}`);
+  }
+  if (result.unpackedFiles > 0) {
+    console.log(`  Unpacked files: ${result.unpackedFiles}`);
   }
 }

@@ -367,3 +367,88 @@ test("CLI: audit with --json and --out writes report", async () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CLI: patch exits with code 1 on missing target", () => {
+  const res = runCli(["patch"]);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Usage: re-tool patch/);
+});
+
+test("CLI: patch packs a directory into .asar with --out", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-patch-pack-"));
+  const srcDir = path.join(tmpDir, "src");
+  const asarPath = path.join(tmpDir, "app.asar");
+
+  try {
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(path.join(srcDir, "main.js"), 'console.log("hello");');
+    await fs.writeFile(path.join(srcDir, "config.json"), '{"env":"test"}');
+
+    const res = runCli(["patch", srcDir, "-o", asarPath, "--json"]);
+    assert.equal(res.status, 0);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.command, "patch");
+    assert.equal(parsed.action, "pack");
+    assert.equal(parsed.totalFiles, 2);
+
+    // Verify it can be listed by asar command
+    const asarListRes = runCli(["asar", asarPath, "--json"]);
+    assert.equal(asarListRes.status, 0);
+    const asarJson = JSON.parse(asarListRes.stdout);
+    assert.equal(asarJson.entries.length, 2);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: patch modifies an existing .asar with text replacement and --replace file", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-patch-edit-"));
+  const srcDir = path.join(tmpDir, "src");
+  const asarPath = path.join(tmpDir, "app.asar");
+  const newHelper = path.join(tmpDir, "helper.js");
+
+  try {
+    await fs.mkdir(srcDir, { recursive: true });
+    await fs.writeFile(path.join(srcDir, "main.js"), 'const isTrial = true;\nrun();');
+    await fs.writeFile(newHelper, 'module.exports = { patch: true };');
+
+    // Pack first
+    runCli(["patch", srcDir, "-o", asarPath]);
+
+    // Now patch in-place: search/replace in main.js and add helper.js
+    const patchRes = runCli([
+      "patch",
+      asarPath,
+      "-f",
+      "main.js",
+      "-s",
+      "isTrial = true",
+      "--replace-text",
+      "isTrial = false",
+      "--replace",
+      `lib/helper.js=${newHelper}`,
+      "--json",
+    ]);
+
+    assert.equal(patchRes.status, 0);
+    const patchJson = JSON.parse(patchRes.stdout);
+    assert.equal(patchJson.action, "patch");
+    assert.deepEqual(patchJson.modified, ["main.js"]);
+    assert.deepEqual(patchJson.added, ["lib/helper.js"]);
+    assert.ok(patchJson.backupPath);
+
+    // Check backup exists
+    assert.equal(await fs.stat(patchJson.backupPath).then(() => true).catch(() => false), true);
+
+    // Extract main.js to verify content
+    const extractDir = path.join(tmpDir, "extracted");
+    runCli(["asar", asarPath, "--extract", "-o", extractDir]);
+    const extractedMain = await fs.readFile(path.join(extractDir, "main.js"), "utf8");
+    assert.match(extractedMain, /isTrial = false/);
+    const extractedHelper = await fs.readFile(path.join(extractDir, "lib/helper.js"), "utf8");
+    assert.match(extractedHelper, /module\.exports = \{ patch: true \};/);
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
