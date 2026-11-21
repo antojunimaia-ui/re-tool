@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_OUT = path.join(ROOT, ".out", "re-tool");
+const ROOT_PKG = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
 const HELP = `
 Usage:
@@ -21,7 +22,7 @@ re-tool-core and re-tool-tui into node_modules).
 Options:
   -o, --out <dir>      Output directory (default: .out/re-tool)
   -n, --name <name>    Package name (default: @juniormaia/re-tool)
-  -v, --version <ver>  Package version (default: 0.4.0)
+  -v, --version <ver>  Package version (default: ${ROOT_PKG.version})
       --build          Run "npm run build" at the repo root first
       --pack           Also create the tarball (npm pack) in --out
       --publish        Also run "npm publish" in --out
@@ -38,7 +39,7 @@ function parseArgs(argv) {
   const opts = {
     out: DEFAULT_OUT,
     name: "@juniormaia/re-tool",
-    version: "0.4.0",
+    version: ROOT_PKG.version || "0.5.0",
     build: false,
     pack: false,
     publish: false,
@@ -107,6 +108,9 @@ function assembleSinglePackage(opts) {
     recursive: true,
   });
 
+  // Copy root README.md so NPM renders it on the package page
+  cpSync(path.join(ROOT, "README.md"), path.join(opts.out, "README.md"));
+
   // Bundle internal workspaces as real directories (not symlinks), so npm
   // includes them via bundledDependencies.
   for (const [name, { dir }] of Object.entries(INTERNAL)) {
@@ -134,13 +138,22 @@ function assembleSinglePackage(opts) {
         name: opts.name,
         version: opts.version,
         description:
-          "Reverse engineering assistant for JavaScript/Electron — search/extract/scan/asar/tui/beautify/pos/line",
+          "Reverse engineering assistant for JavaScript/Electron and live web targets",
         author: "antojunimaia-ui",
         license: "Apache-2.0",
+        repository: {
+          type: "git",
+          url: "https://github.com/antojunimaia-ui/re-tool.git",
+        },
+        homepage: "https://github.com/antojunimaia-ui/re-tool#readme",
+        bugs: {
+          url: "https://github.com/antojunimaia-ui/re-tool/issues",
+        },
         type: "module",
         bin: { "re-tool": "dist/index.js" },
         files: [
           "dist",
+          "README.md",
           "node_modules/re-tool-core",
           "node_modules/re-tool-tui",
         ],
