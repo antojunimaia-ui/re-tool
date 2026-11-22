@@ -2,6 +2,15 @@
 
 A reverse engineering assistant for **JavaScript/Electron**.
 
+> **Built for AI agents, not for humans.**
+>
+> `re-tool` is designed first and foremost to be driven by LLM agents and
+> automated pipelines: every command has a canonical JSON output, stable
+> schemas, deterministic behavior, bounded resource usage and machine-readable
+> errors. The interactive pieces (TUI, pretty summaries) exist so a human can
+> *read* the results, not so a human can drive the tool. Prefer the `--json`
+> output when scripting, and treat the CLI as a tool-call surface for agents.
+
 ## Structure
 
 ```
@@ -14,7 +23,9 @@ re-tool/
 ```
 
 - Strict TypeScript, ESM, npm workspaces.
-- Canonical output is **JSON** (`--json` / `scan`), with human-friendly text by default.
+- Canonical output is **JSON** (`--json` / `scan`); `--json` is the agent-facing
+  interface and is stable across versions. Human-friendly text and the TUI are
+  secondary views over the same data.
 
 ## Requirements
 
@@ -38,6 +49,11 @@ npm run build
 ```
 
 ## Usage
+
+`re-tool` is a CLI surface for agents: one command, one job, `--json` when you
+need structured data. Every command works with a plain `--json` output that an
+agent can parse directly; the schema is stable per feature (`re-tool/report@2`,
+`re-tool/web-report@1`, `re-tool/doctor@1`, …).
 
 ```sh
 # Search with context (default: main.js in the current directory)
