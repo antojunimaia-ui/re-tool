@@ -134,6 +134,40 @@ test("getStringsForTui: web report strings keep the asset path", () => {
   assert.equal(result.strings[0].value, "abc");
 });
 
+test("buildSections: runtime network capture adds a Runtime section", () => {
+  const report = webReport();
+  report.summary.runtimeSeconds = 4;
+  report.runtime = {
+    seconds: 4,
+    requests: [
+      {
+        ts: 120,
+        kind: "fetch",
+        method: "GET",
+        url: "https://api.site.test/v1/poll",
+        status: 200,
+        mimeType: "application/json",
+        bytes: 512,
+      },
+    ],
+    websockets: [
+      { ts: 300, direction: "recv", payloadLength: 64, preview: '{"ok":true}' },
+    ],
+  };
+
+  const sections = buildSections(report);
+  const summary = sections.find((s) => s.title === "Summary");
+  assert.ok(summary.lines.some((l) => l.includes("runtime 4s")));
+  assert.ok(summary.lines.some((l) => l.includes("1 requests")));
+
+  const runtime = sections.find((s) => s.title === "Runtime (2)");
+  assert.ok(runtime, "Runtime section expected");
+  const text = runtime.lines.join("\n");
+  assert.ok(text.includes("GET https://api.site.test/v1/poll → 200"));
+  assert.ok(text.includes("ws recv 64B"));
+  assert.ok(!text.includes('{"ok":true}'), "websocket payload must be masked");
+});
+
 test("renderPreview: web report renders a frame", () => {
   const frame = renderPreview(webReport());
   assert.ok(frame.includes("re-tool/web-report@1"));

@@ -145,6 +145,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--browser-path <path>` | web | — | Explicit browser executable for `--browser` |
 | `--headed` | web | — | Show a real browser window (some challenges reject headless) |
 | `--settle <ms>` | web | `1200` | Extra wait after load in `--browser` mode |
+| `--watch <seconds>` | web | `0` | Keep observing the page after it settles and record every request/WebSocket frame (runtime network capture; needs `--browser`) |
 | `--challenge-wait <ms>` | web | `15000` headed / `0` headless | Extra wait for a detected challenge to clear |
 | `--allow-challenge` | web | — | Keep the challenge page in the report instead of failing |
 | `--tui` | web | — | Open the TUI right after the analysis |
@@ -379,6 +380,40 @@ What changes in the report:
 - `endpoints` also include XHR/fetch request URLs made while loading
 - `storage` lists cookies, `localStorage` and `sessionStorage` (full values in
   JSON; masked in the CLI summary and the TUI)
+
+#### Runtime network capture (`--watch`)
+
+`--watch <seconds>` keeps the browser open *after* the page settles and records
+everything that happens during that window — XHR/fetch polling, analytics
+beacons, WebSocket traffic. Used to observe what a page does over time instead
+of only at load:
+
+```sh
+re-tool web https://example.com --browser --watch 10
+re-tool tui --web https://example.com --browser --watch 10   # + TUI
+```
+
+It adds a `runtime` section to the report:
+
+```jsonc
+"runtime": {
+  "seconds": 5,
+  "requests": [
+    { "ts": 1491, "kind": "fetch", "method": "GET", "url": "https://…/api/poll/1",
+      "status": 200, "mimeType": "application/json", "bytes": 192 }
+  ],
+  "websockets": [
+    { "ts": 300, "direction": "recv", "payloadLength": 64, "preview": "…" }
+  ]
+}
+```
+
+- `ts` is milliseconds after the watch window started; `kind` is
+  `document`/`script`/`xhr`/`fetch`/`websocket`/`other`
+- WebSocket payloads are stored as a short masked preview — never full frames
+- The final HTML snapshot is taken after the watch, so the DOM reflects any
+  changes the observed activity caused
+- A `summary.runtimeSeconds` field tells you the window length (0 = not used)
 
 #### Diagnostics
 

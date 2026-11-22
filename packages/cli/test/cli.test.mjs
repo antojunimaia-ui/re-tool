@@ -65,6 +65,13 @@ test("parseArgs: extracts --key=value and --key value options", () => {
   assert.equal(optValue(parsed.options, "limit"), "20");
 });
 
+test("parseArgs: --watch takes a numeric value and does not eat positionals", () => {
+  const parsed = parseArgs(["web", "https://example.com", "--watch", "8"]);
+  assert.deepEqual(parsed.positional, ["web", "https://example.com"]);
+  assert.equal(optValue(parsed.options, "watch"), "8");
+  assert.ok(!parsed.bools.has("watch")); // value option, not a bool flag
+});
+
 test("parseArgs: flags in BOOL_FLAGS never consume the next argument", () => {
   const parsed = parseArgs(["search", "token", "--json", "--file", "main.js"]);
   assert.deepEqual(parsed.positional, ["search", "token"]);

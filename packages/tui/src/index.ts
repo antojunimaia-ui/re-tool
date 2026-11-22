@@ -299,6 +299,11 @@ export function buildSections(report: Record<string, unknown>): Section[] {
               : ""
           }`,
           `strings ${r.summary.totalStrings} · frameworks ${r.summary.frameworks} · endpoints ${r.summary.endpoints} · routes ${r.summary.routes} · keys ${r.summary.keys} · flags ${r.summary.featureFlags}`,
+          ...(r.summary.runtimeSeconds
+            ? [
+                `runtime ${r.summary.runtimeSeconds}s · ${r.runtime?.requests.length ?? 0} requests · ${r.runtime?.websockets.length ?? 0} websocket frames`,
+              ]
+            : []),
         ],
       },
       {
@@ -363,6 +368,29 @@ export function buildSections(report: Record<string, unknown>): Section[] {
                 r.storage.sessionStorage.length
               })`,
               lines: storageLines(r.storage),
+            },
+          ]
+        : []),
+      ...(r.runtime
+        ? [
+            {
+              title: `Runtime (${r.runtime.requests.length + r.runtime.websockets.length})`,
+              lines: [
+                `watched ${r.runtime.seconds}s — ${r.runtime.requests.length} requests · ${r.runtime.websockets.length} websocket frames`,
+                ...r.runtime.requests.slice(0, 60).map(
+                  (req) =>
+                    `+${String(req.ts).padStart(4)}ms ${req.method} ${req.url} → ${req.status} (${req.kind}${req.bytes ? `, ${req.bytes}B` : ""})`,
+                ),
+                ...(r.runtime.requests.length > 60
+                  ? [`(… +${r.runtime.requests.length - 60} more requests)`]
+                  : []),
+                ...r.runtime.websockets.slice(0, 20).map(
+                  (f) => `ws ${f.direction} ${f.payloadLength}B: ${maskSecret(f.preview)}`,
+                ),
+                ...(r.runtime.websockets.length > 20
+                  ? [`(… +${r.runtime.websockets.length - 20} more frames)`]
+                  : []),
+              ],
             },
           ]
         : []),

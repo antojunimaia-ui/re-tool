@@ -25,6 +25,12 @@ export interface BrowserCaptureOptions {
   timeoutMs?: number;
   /** Extra wait after the load event, for XHR/SPA rendering. Default: 1200. */
   settleMs?: number;
+  /**
+   * After settling, keep observing the page for this many milliseconds,
+   * recording every network request and WebSocket frame that happens
+   * (XHR/fetch, polling, websockets). Default: 0 (no watch).
+   */
+  watchMs?: number;
   /** Max bytes of response bodies kept in memory. Default: 32 MB. */
   maxTotalBytes?: number;
   /** Cookie header sent with every request (e.g. "session=abc; theme=dark"). */
@@ -62,6 +68,36 @@ export interface StorageItem {
   domain?: string;
 }
 
+/** One HTTP request observed during the watch window. */
+export interface RuntimeNetworkRequest {
+  /** Milliseconds after the watch window started. */
+  ts: number;
+  kind: "document" | "script" | "xhr" | "fetch" | "websocket" | "other";
+  method: string;
+  url: string;
+  status: number;
+  mimeType: string;
+  /** Encoded response length; 0 when the browser did not report it. */
+  bytes: number;
+}
+
+/** One WebSocket frame observed during the watch window. */
+export interface RuntimeWebSocketFrame {
+  /** Milliseconds after the watch window started. */
+  ts: number;
+  direction: "send" | "recv";
+  payloadLength: number;
+  /** First 120 chars of the payload (safe for printing). */
+  preview: string;
+}
+
+/** What the page did while we watched it. */
+export interface RuntimeCapture {
+  seconds: number;
+  requests: RuntimeNetworkRequest[];
+  websockets: RuntimeWebSocketFrame[];
+}
+
 export interface BrowserCapture {
   url: string;
   status: number;
@@ -71,6 +107,8 @@ export interface BrowserCapture {
   /** Set when the captured page looks like a bot challenge/interstitial. */
   challenge?: ChallengeInfo;
   responses: CapturedResponse[];
+  /** Set when `watchMs > 0`: network activity during the watch window. */
+  runtime?: RuntimeCapture;
   storage: {
     cookies: StorageItem[];
     localStorage: StorageItem[];
@@ -437,8 +475,28 @@ export async function captureWithBrowser(
     const responses = new Map<string, RawResponse>();
     let bodyBudget = maxTotalBytes;
 
+    // Runtime network observation (used by --watch).
+    const clockStart = Date.now();
+    const reqMethods = new Map<string, string>();
+    const reqSizes = new Map<string, number>();
+    interface RawNetEvent {
+      ts: number;
+      requestId: string;
+      kind: string;
+      method: string;
+      url: string;
+      status: number;
+      mimeType: string;
+    }
+    const netEvents: RawNetEvent[] = [];
+    const wsFrames: RuntimeWebSocketFrame[] = [];
+
     conn.on(({ method, params }) => {
-      if (method === "Network.responseReceived") {
+      const ts = Date.now() - clockStart;
+      if (method === "Network.requestWillBeSent") {
+        const p = params as { requestId: string; request: { method?: string } };
+        reqMethods.set(p.requestId, p.request?.method ?? "GET");
+      } else if (method === "Network.responseReceived") {
         const p = params as {
           requestId: string;
           response: { url: string; status: number; mimeType: string };
@@ -450,6 +508,32 @@ export async function captureWithBrowser(
           status: p.response.status,
           mimeType: p.response.mimeType,
           resourceType: p.type,
+        });
+        netEvents.push({
+          ts,
+          requestId: p.requestId,
+          kind: p.type,
+          method: reqMethods.get(p.requestId) ?? "GET",
+          url: p.response.url,
+          status: p.response.status,
+          mimeType: p.response.mimeType,
+        });
+      } else if (method === "Network.loadingFinished") {
+        const p = params as { requestId: string; encodedDataLength: number };
+        reqSizes.set(p.requestId, p.encodedDataLength ?? 0);
+      } else if (
+        method === "Network.webSocketFrameReceived" ||
+        method === "Network.webSocketFrameSent"
+      ) {
+        const p = params as { response: { payloadData?: string } };
+        const direction: "send" | "recv" =
+          method === "Network.webSocketFrameReceived" ? "recv" : "send";
+        const payload = p.response?.payloadData ?? "";
+        wsFrames.push({
+          ts,
+          direction,
+          payloadLength: Buffer.byteLength(payload, "utf8"),
+          preview: payload.slice(0, 120),
         });
       }
     });
@@ -534,6 +618,63 @@ export async function captureWithBrowser(
       challenge = detectChallenge(html, typeof title === "string" ? title : null);
       if (!challenge || Date.now() >= challengeDeadline) break;
       await sleep(500);
+    }
+
+    // Runtime watch: keep observing the page for a few seconds and record
+    // every request/WebSocket frame that happens during that window.
+    const watchMs = opts.watchMs ?? 0;
+    let runtime: RuntimeCapture | undefined;
+    if (watchMs > 0) {
+      const watchStartTs = Date.now() - clockStart;
+      await sleep(watchMs);
+
+      // Refresh the final DOM/storage snapshot after the watched activity.
+      try {
+        const finalHtml = String((await evaluate("document.documentElement.outerHTML")) ?? "");
+        if (finalHtml) html = finalHtml;
+      } catch {
+        /* keep the pre-watch html */
+      }
+
+      const kindOf = (raw: string): RuntimeNetworkRequest["kind"] => {
+        switch (raw) {
+          case "Document":
+            return "document";
+          case "Script":
+            return "script";
+          case "XHR":
+            return "xhr";
+          case "Fetch":
+            return "fetch";
+          case "WebSocket":
+            return "websocket";
+          default:
+            return "other";
+        }
+      };
+
+      const requests = netEvents
+        .filter((e) => e.ts >= watchStartTs)
+        .map((e) => ({
+          ts: e.ts - watchStartTs,
+          kind: kindOf(e.kind),
+          method: e.method,
+          url: e.url,
+          status: e.status,
+          mimeType: e.mimeType,
+          bytes: reqSizes.get(e.requestId) ?? 0,
+        }))
+        .sort((a, b) => a.ts - b.ts);
+
+      const websockets = wsFrames
+        .filter((f) => f.ts >= watchStartTs)
+        .map((f) => ({ ...f, ts: f.ts - watchStartTs }));
+
+      runtime = {
+        seconds: Math.round(watchMs / 1000),
+        requests,
+        websockets,
+      };
     }
 
     const userAgent = String((await evaluate("navigator.userAgent")) ?? "");
@@ -621,6 +762,7 @@ export async function captureWithBrowser(
       html,
       userAgent,
       ...(challenge ? { challenge } : {}),
+      ...(runtime ? { runtime } : {}),
       responses: captured,
       storage: {
         cookies,

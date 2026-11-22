@@ -7,6 +7,7 @@ import {
   captureWithBrowser,
   type BrowserCapture,
   type ChallengeInfo,
+  type RuntimeCapture,
   type StorageItem,
 } from "./browser.js";
 import { scanSource, type ScanReport } from "./report.js";
@@ -106,6 +107,12 @@ export interface AnalyzeWebOptions {
   browserPath?: string;
   /** Extra wait after the load event in `browser` mode. Default: 1200. */
   settleMs?: number;
+  /**
+   * In `browser` mode, keep observing the page for this many seconds after it
+   * settles and record every request/WebSocket frame that happens (runtime
+   * network capture). Default: 0.
+   */
+  watchSeconds?: number;
   /** Shows a real browser window instead of headless (helps with challenges). */
   headed?: boolean;
   /** Extra wait for a detected challenge to clear (default: 15 s when headed). */
@@ -230,6 +237,8 @@ export interface WebSummary {
   routes: number;
   keys: number;
   featureFlags: number;
+  /** Seconds of runtime network observation (`--watch`). 0 when not used. */
+  runtimeSeconds: number;
 }
 
 export interface WebReport {
@@ -247,6 +256,8 @@ export interface WebReport {
   featureFlags: WebFeatureFlag[];
   /** Cookies/web storage captured in `browser` mode. */
   storage?: WebStorage;
+  /** Runtime network capture (`--watch`), in `browser` mode. */
+  runtime?: RuntimeCapture;
   /** Whether every discovered script was analyzed. */
   coverage: WebCoverage;
   summary: WebSummary;
@@ -496,6 +507,7 @@ export async function analyzeWeb(
         browserPath: opts.browserPath,
         timeoutMs: Math.max(timeoutMs, 20000),
         settleMs: opts.settleMs,
+        watchMs: (opts.watchSeconds ?? 0) * 1000,
         maxTotalBytes: totalLimit,
         cookie,
         userAgent,
@@ -928,6 +940,7 @@ export async function analyzeWeb(
     keys: findings.keys,
     featureFlags: findings.featureFlags,
     ...(captured ? { storage: captured.storage } : {}),
+    ...(captured?.runtime ? { runtime: captured.runtime } : {}),
     summary: {
       elapsedMs: Date.now() - started,
       assets: assets.length,
@@ -942,6 +955,7 @@ export async function analyzeWeb(
       routes: findings.routes.length,
       keys: findings.keys.length,
       featureFlags: findings.featureFlags.length,
+      runtimeSeconds: captured?.runtime?.seconds ?? 0,
     },
   };
 

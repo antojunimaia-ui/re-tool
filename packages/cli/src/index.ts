@@ -137,6 +137,9 @@ web options:
       --browser-path <path> Explicit browser executable for --browser
       --headed         Show a real browser window (some challenges reject headless)
       --settle <ms>    Extra wait after load in --browser mode (default: 1200)
+      --watch <seconds> Keep observing the page after it settles and record
+                       every request/WebSocket frame that happens (runtime
+                       network capture; requires --browser)
       --challenge-wait <ms> Extra wait for a detected challenge to clear
                        (default: 15000 with --headed, 0 headless)
       --allow-challenge Keep going when the page is still a bot challenge
@@ -151,7 +154,7 @@ tui options:
       --scan <file>    Run analysis and open the TUI directly
       --web <url>      Analyze a live site and open the TUI directly
                        (accepts --user-agent, --cookie, --ignore-robots, --browser,
-                        --browser-path, --headed, --settle, --challenge-wait,
+                        --browser-path, --headed, --settle, --watch, --challenge-wait,
                         --allow-challenge, --max-scripts, --timeout)
       --preview        Print a static frame (no interaction; ansi engine only)
       --engine <name>  Engine: ansi (default) | opentui (needs Node >= 26.4 or Bun)

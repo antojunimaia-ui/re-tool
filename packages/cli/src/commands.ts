@@ -296,6 +296,7 @@ function webAnalysisOptions(
       WEB_DEFAULTS.settleMs,
       "Settle time",
     ),
+    watchSeconds: parseNonNegativeInt(optValue(args.options, "watch"), 0, "Watch seconds"),
     headed: hasFlag(args.bools, args.options, "headed"),
     challengeWaitMs: parseNonNegativeInt(
       optValue(args.options, "challenge-wait"),
@@ -450,6 +451,24 @@ function printWebSummary(r: WebReport): void {
   console.log(
     `  findings: ${r.summary.totalStrings} strings · ${r.summary.endpoints} endpoints · ${r.summary.routes} routes · ${r.summary.keys} keys · ${r.summary.featureFlags} flags`,
   );
+
+  if (r.runtime) {
+    const rt = r.runtime;
+    console.log(
+      `  runtime: watched ${rt.seconds}s — ${rt.requests.length} requests · ${rt.websockets.length} websocket frames`,
+    );
+    for (const req of rt.requests.slice(0, 10)) {
+      console.log(
+        `    +${String(req.ts).padStart(4)}ms ${req.method} ${req.url} → ${req.status} (${req.kind}${req.bytes ? `, ${formatBytes(req.bytes)}` : ""})`,
+      );
+    }
+    if (rt.requests.length > 10) console.log(`    (… +${rt.requests.length - 10} requests in --json)`);
+    for (const frame of rt.websockets.slice(0, 5)) {
+      console.log(
+        `    ws ${frame.direction} ${frame.payloadLength}B: ${maskSecret(frame.preview)}`,
+      );
+    }
+  }
 
   if (r.storage) {
     const s = r.storage;

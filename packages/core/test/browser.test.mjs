@@ -97,6 +97,24 @@ test.before(async () => {
       );
       return;
     }
+    if (url.pathname === "/watch") {
+      return html(`<!doctype html>
+<html><head><title>Watch</title></head>
+<body><div id="root">idle</div>
+<script>
+  setTimeout(() => {
+    fetch("/api/late")
+      .then((r) => r.json())
+      .then((d) => { document.getElementById("root").textContent = d.state; });
+  }, 1500);
+</script>
+</body></html>`);
+    }
+    if (url.pathname === "/api/late") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ state: "late-ok" }));
+      return;
+    }
     if (url.pathname === "/app.js") return js(APP_JS);
     if (url.pathname === "/dynamic.js") return js(DYNAMIC_JS);
     if (url.pathname === "/api/config") {
@@ -247,6 +265,44 @@ test(
 );
 
 test(
+  "captureWithBrowser records runtime network during a watch window",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const capture = await captureWithBrowser(`${base}/watch`, {
+      browserPath,
+      timeoutMs: 40000,
+      settleMs: 300,
+      watchMs: 3500,
+    });
+
+    assert.ok(capture.runtime, "runtime capture expected with watchMs");
+    assert.equal(capture.runtime.seconds, 4); // Math.round(3500/1000)
+    const late = capture.runtime.requests.find((r) => r.url.endsWith("/api/late"));
+    assert.ok(late, "the late /api/late fetch must appear in the watch window");
+    assert.equal(late.method, "GET");
+    assert.equal(late.status, 200);
+    assert.equal(late.kind, "fetch");
+    assert.ok(late.ts > 0);
+
+    // The page updated after the watched fetch → final html reflects it.
+    assert.ok(capture.html.includes("late-ok"));
+  },
+);
+
+test(
+  "captureWithBrowser without watchMs has no runtime capture",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const capture = await captureWithBrowser(`${base}/watch`, {
+      browserPath,
+      timeoutMs: 40000,
+      settleMs: 300,
+    });
+    assert.equal(capture.runtime, undefined);
+  },
+);
+
+test(
   "probeBrowser launches, inspects a page and reports version/cdpOk",
   { skip: skipBrowser, timeout: 120_000 },
   async () => {
@@ -255,6 +311,26 @@ test(
     assert.ok(probe.version, "version string expected");
     assert.equal(probe.cdpOk, true, probe.error ?? "");
     assert.ok(probe.ms > 0);
+  },
+);
+
+test(
+  "analyzeWeb forwards watchSeconds and includes runtime in the report",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const report = await analyzeWeb(`${base}/watch`, {
+      browser: true,
+      browserPath,
+      settleMs: 300,
+      watchSeconds: 3,
+      timeoutMs: 40000,
+    });
+
+    assert.ok(report.runtime, "runtime section expected with watchSeconds");
+    assert.equal(report.summary.runtimeSeconds, 3);
+    assert.ok(
+      report.runtime.requests.some((r) => r.url.endsWith("/api/late")),
+    );
   },
 );
 
