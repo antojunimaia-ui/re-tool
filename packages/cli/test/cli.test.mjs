@@ -72,6 +72,12 @@ test("parseArgs: --watch takes a numeric value and does not eat positionals", ()
   assert.ok(!parsed.bools.has("watch")); // value option, not a bool flag
 });
 
+test("parseArgs: --connect captures the CDP endpoint", () => {
+  const parsed = parseArgs(["web", "https://example.com", "--connect", "http://127.0.0.1:9222"]);
+  assert.deepEqual(parsed.positional, ["web", "https://example.com"]);
+  assert.equal(optValue(parsed.options, "connect"), "http://127.0.0.1:9222");
+});
+
 test("parseArgs: flags in BOOL_FLAGS never consume the next argument", () => {
   const parsed = parseArgs(["search", "token", "--json", "--file", "main.js"]);
   assert.deepEqual(parsed.positional, ["search", "token"]);

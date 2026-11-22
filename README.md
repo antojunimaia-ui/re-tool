@@ -143,6 +143,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--ignore-robots` | web | — | Skip the `robots.txt` check (authorized targets only) |
 | `--browser` | web | — | Capture with Chrome/Edge over CDP (executes JS, records XHR and storage) |
 | `--browser-path <path>` | web | — | Explicit browser executable for `--browser` |
+| `--connect <endpoint>` | web | — | Drive an already-running browser over CDP (`http://127.0.0.1:9222` or a `ws://` page target); your browser keeps its real profile, cookies and sessions |
 | `--headed` | web | — | Show a real browser window (some challenges reject headless) |
 | `--settle <ms>` | web | `1200` | Extra wait after load in `--browser` mode |
 | `--watch <seconds>` | web | `0` | Keep observing the page after it settles and record every request/WebSocket frame (runtime network capture; needs `--browser`) |
@@ -380,6 +381,51 @@ What changes in the report:
 - `endpoints` also include XHR/fetch request URLs made while loading
 - `storage` lists cookies, `localStorage` and `sessionStorage` (full values in
   JSON; masked in the CLI summary and the TUI)
+
+#### Drive your own browser (`--connect`)
+
+`--connect` makes `re-tool web` drive the **browser you already have open** —
+with its real profile, cookies and logged-in sessions — instead of launching a
+sandboxed one. Useful for analyzing pages behind a login or a challenge you have
+already solved in your own browser.
+
+First, start your browser with DevTools enabled on a dedicated port (Chrome and
+Edge): 
+
+```sh
+# Windows
+chrome --remote-debugging-port=9222 --user-data-dir="C:\Users\<you>\chrome-debug"
+# macOS
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --remote-debugging-port=9222 --user-data-dir="$HOME/chrome-debug"
+# Linux
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/chrome-debug"
+```
+
+> A separate `--user-data-dir` is required: Chrome refuses remote debugging on
+> the *default* profile for security. Log in to the sites you need in that
+> window first — the session lives in that profile.
+
+Then analyze with your session:
+
+```sh
+re-tool web https://app.example.com/account --browser --connect http://127.0.0.1:9222
+re-tool tui --web https://app.example.com/account --browser --connect http://127.0.0.1:9222
+re-tool web https://app.example.com/account --browser --connect http://127.0.0.1:9222 --watch 10
+```
+
+What happens: a **new tab** is opened (about:blank), the tool attaches to it,
+runs the full pipeline (capture, `--watch` runtime network, storage — all using
+your real cookies), closes *only that tab*, and leaves your browser open. Your
+other tabs and the browser process are untouched.
+
+- `page.connect` records the endpoint used; the CLI/TUI label the capture as
+  `connected browser`
+- `--connect` combines with everything else: `--watch`, `--settle`,
+  `--challenge-wait`, `--allow-challenge`. `--headed` is ignored (the browser is
+  already visible)
+- Use only on targets you are authorized to test — this mode sends your real
+  session cookies to them
 
 #### Runtime network capture (`--watch`)
 

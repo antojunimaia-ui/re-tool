@@ -315,9 +315,11 @@ export function buildSections(report: Record<string, unknown>): Section[] {
           `base: ${r.page.baseUrl}`,
           `capture: ${
             r.page.capture === "browser"
-              ? r.page.headed
-                ? "browser window (JS executed)"
-                : "headless browser (JS executed)"
+              ? r.page.connect
+                ? `connected browser (${r.page.connect})`
+                : r.page.headed
+                  ? "browser window (JS executed)"
+                  : "headless browser (JS executed)"
               : "http"
           }`,
           ...(r.page.challenge

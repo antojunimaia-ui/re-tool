@@ -1,6 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import http from "node:http";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import {
   ToolError,
@@ -13,6 +17,64 @@ import {
 
 const browserPath = findBrowser();
 const skipBrowser = browserPath ? false : "no Chromium-based browser installed";
+
+/** Spawns a browser with a remote debugging port and resolves the port from
+ * its stderr ("DevTools listening on ws://127.0.0.1:<port>/"). */
+async function startBrowserWithDebugPort() {
+  const profileDir = mkdtempSync(path.join(os.tmpdir(), "re-tool-connect-test-"));
+  const child = spawn(
+    browserPath,
+    [
+      "--headless=new",
+      "--disable-gpu",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-extensions",
+      "--remote-debugging-port=0",
+      `--user-data-dir=${profileDir}`,
+      "about:blank",
+    ],
+    { stdio: ["ignore", "ignore", "pipe"], windowsHide: true },
+  );
+
+  const port = await new Promise((resolve, reject) => {
+    let out = "";
+    const timer = setTimeout(() => reject(new Error("timeout waiting for debug port")), 20000);
+    child.stderr.on("data", (d) => {
+      out += d.toString();
+      const m = out.match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//);
+      if (m) {
+        clearTimeout(timer);
+        resolve(Number(m[1]));
+      }
+    });
+    child.on("error", reject);
+  });
+
+  return {
+    child,
+    profileDir,
+    port,
+    async stop() {
+      if (child.exitCode === null) {
+        if (process.platform === "win32") {
+          const { spawnSync } = await import("node:child_process");
+          spawnSync("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+            stdio: "ignore",
+            windowsHide: true,
+          });
+        } else {
+          child.kill("SIGKILL");
+        }
+      }
+      try {
+        rmSync(profileDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+      } catch {
+        /* best effort */
+      }
+    },
+  };
+}
 
 const PAGE = `<!doctype html>
 <html>
@@ -331,6 +393,61 @@ test(
     assert.ok(
       report.runtime.requests.some((r) => r.url.endsWith("/api/late")),
     );
+  },
+);
+
+test(
+  "captureWithBrowser drives an already-running browser via connectUrl (keeps it alive)",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const launched = await startBrowserWithDebugPort();
+    try {
+      const capture = await captureWithBrowser(`${base}/`, {
+        connectUrl: `http://127.0.0.1:${launched.port}`,
+        timeoutMs: 40000,
+        settleMs: 1500,
+      });
+
+      // The external browser's profile is used: storage is real.
+      assert.equal(capture.status, 200);
+      assert.equal(capture.html.includes("Ready spa"), true);
+      assert.equal(
+        capture.storage.localStorage.find((i) => i.name === "token")?.value,
+        "local-secret-123",
+      );
+      assert.equal(
+        capture.storage.cookies.find((c) => c.name === "seen")?.value,
+        "1",
+      );
+
+      // The browser process must still be alive after the capture: we only
+      // closed our tab, not the user's browser.
+      assert.equal(launched.child.exitCode, null, "external browser must stay alive");
+    } finally {
+      await launched.stop();
+    }
+  },
+);
+
+test(
+  "analyzeWeb works against a connected browser and records page.connect",
+  { skip: skipBrowser, timeout: 120_000 },
+  async () => {
+    const launched = await startBrowserWithDebugPort();
+    try {
+      const report = await analyzeWeb(`${base}/`, {
+        connectUrl: `http://127.0.0.1:${launched.port}`,
+        settleMs: 1500,
+        timeoutMs: 40000,
+      });
+      assert.equal(report.page.capture, "browser");
+      assert.equal(report.page.headed, undefined);
+      assert.ok(report.page.connect.includes("127.0.0.1"));
+      assert.equal(report.page.status, 200);
+      assert.ok(report.storage);
+    } finally {
+      await launched.stop();
+    }
   },
 );
 

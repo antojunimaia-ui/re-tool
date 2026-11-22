@@ -291,6 +291,7 @@ function webAnalysisOptions(
     ignoreRobots: hasFlag(args.bools, args.options, "ignore-robots"),
     browser: hasFlag(args.bools, args.options, "browser"),
     browserPath: optValue(args.options, "browser-path"),
+    connectUrl: optValue(args.options, "connect"),
     settleMs: parseNonNegativeInt(
       optValue(args.options, "settle"),
       WEB_DEFAULTS.settleMs,
@@ -394,13 +395,17 @@ function printWebSummary(r: WebReport): void {
   );
   if (r.page.title) console.log(`  title: ${r.page.title}`);
   if (r.page.capture === "browser") {
-    console.log(
-      `  capture: ${
-        r.page.headed
-          ? "browser window (JavaScript executed, network captured)"
-          : "headless browser (JavaScript executed, network captured)"
-      }`,
-    );
+    if (r.page.connect) {
+      console.log(`  capture: connected browser via ${r.page.connect} (your profile/cookies kept)`);
+    } else {
+      console.log(
+        `  capture: ${
+          r.page.headed
+            ? "browser window (JavaScript executed, network captured)"
+            : "headless browser (JavaScript executed, network captured)"
+        }`,
+      );
+    }
   }
   if (r.page.challenge) {
     console.log(

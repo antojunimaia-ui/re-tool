@@ -40,6 +40,14 @@ export interface BrowserCaptureOptions {
   /** Shows a real browser window instead of headless. Default: false. */
   headed?: boolean;
   /**
+   * Connect to an already-running browser (your real one) over CDP instead of
+   * launching a fresh instance. Pass `http://127.0.0.1:9222` (or a
+   * `ws://…` page target URL). The browser keeps its own profile, cookies and
+   * logged-in sessions; a new tab is opened and closed for the capture, your
+   * other tabs are untouched. Default: none (launch our own browser).
+   */
+  connectUrl?: string;
+  /**
    * Extra time spent waiting for a detected bot challenge to clear (polling
    * every 500 ms). Default: 0 (headless) or 15000 (headed).
    */
@@ -449,6 +457,72 @@ interface RawResponse {
   body?: string;
 }
 
+interface ConnectTab {
+  targetId: string;
+  wsUrl: string;
+}
+
+/**
+ * Opens a new page tab on an already-running browser (the user's real one)
+ * over its DevTools HTTP endpoint, and returns the WebSocket to drive it.
+ * The tab starts at `about:blank`; navigation to the target URL happens later,
+ * after network capture is enabled, so nothing is missed.
+ */
+async function createConnectTab(endpoint: string, timeoutMs: number): Promise<ConnectTab> {
+  const ep = endpoint.trim().replace(/\/+$/, "");
+
+  // A `ws://` endpoint is a page target we are already attached to: use it
+  // directly (we cannot close it — it belongs to the user).
+  if (/^ws:\/\//i.test(ep)) {
+    return { targetId: "", wsUrl: ep };
+  }
+
+  if (!/^https?:\/\//i.test(ep)) {
+    throw new ToolError(
+      `Invalid CDP endpoint: ${endpoint}. Use http://127.0.0.1:<port> (DevTools) or a ws:// page target URL.`,
+    );
+  }
+
+  // The browser must actually expose DevTools before we try to create a tab.
+  let versionOk = false;
+  try {
+    const vr = await fetch(`${ep}/json/version`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    versionOk = vr.ok;
+  } catch {
+    versionOk = false;
+  }
+  if (!versionOk) {
+    throw new ToolError(
+      `No DevTools endpoint at ${ep}. Start your browser with:\n` +
+        '  chrome --remote-debugging-port=9222 --user-data-dir="C:\\Users\\<you>\\chrome-debug"\n' +
+        "then run: re-tool web <url> --browser --connect http://127.0.0.1:9222",
+    );
+  }
+
+  // Create a fresh tab (about:blank). The browser requires or accepts PUT;
+  // some builds only accept GET, so fall back.
+  const tabUrl = `${ep}/json/new?${encodeURIComponent("about:blank")}`;
+  let res = await fetch(tabUrl, { method: "PUT", signal: AbortSignal.timeout(10000) });
+  if (!res.ok) {
+    res = await fetch(tabUrl, { method: "GET", signal: AbortSignal.timeout(10000) });
+  }
+  if (!res.ok) {
+    throw new ToolError(`Could not create a tab on the browser (HTTP ${res.status}).`);
+  }
+
+  const data = (await res.json()) as {
+    id?: string;
+    type?: string;
+    webSocketDebuggerUrl?: string;
+  };
+  if (!data.webSocketDebuggerUrl) {
+    throw new ToolError("The browser did not expose a WebSocket for the new tab.");
+  }
+  return { targetId: data.id ?? "", wsUrl: data.webSocketDebuggerUrl };
+}
+
 export async function captureWithBrowser(
   input: string,
   opts: BrowserCaptureOptions = {},
@@ -457,20 +531,27 @@ export async function captureWithBrowser(
   const settleMs = opts.settleMs ?? 1200;
   const maxTotalBytes = opts.maxTotalBytes ?? 32 * 1024 * 1024;
 
-  const browserPath = findBrowser(opts.browserPath);
-  if (!browserPath) {
-    throw new ToolError(
-      "No Chromium-based browser found. Install Chrome/Edge/Chromium, set RETOOL_BROWSER " +
-        "to the executable, or pass --browser-path <path>.",
-    );
-  }
-
-  const launched = await launchBrowser(browserPath, timeoutMs, opts.headed === true);
+  let launched: LaunchedBrowser | null = null;
+  let connectTab: ConnectTab | null = null;
   let conn: CdpConnection | null = null;
 
   try {
-    const wsUrl = await fetchPageTarget(launched.port, timeoutMs);
-    conn = await CdpConnection.connect(wsUrl, timeoutMs);
+    if (opts.connectUrl) {
+      // Drive the user's own browser: keep its profile, cookies and sessions.
+      connectTab = await createConnectTab(opts.connectUrl, timeoutMs);
+      conn = await CdpConnection.connect(connectTab.wsUrl, timeoutMs);
+    } else {
+      const browserPath = findBrowser(opts.browserPath);
+      if (!browserPath) {
+        throw new ToolError(
+          "No Chromium-based browser found. Install Chrome/Edge/Chromium, set RETOOL_BROWSER " +
+            "to the executable, or pass --browser-path <path>.",
+        );
+      }
+      launched = await launchBrowser(browserPath, timeoutMs, opts.headed === true);
+      const wsUrl = await fetchPageTarget(launched.port, timeoutMs);
+      conn = await CdpConnection.connect(wsUrl, timeoutMs);
+    }
 
     const responses = new Map<string, RawResponse>();
     let bodyBudget = maxTotalBytes;
@@ -771,14 +852,29 @@ export async function captureWithBrowser(
       },
     };
   } finally {
-    try {
-      await conn?.send("Browser.close", {}, 2000);
-    } catch {
-      /* ignore */
+    if (conn) {
+      if (opts.connectUrl) {
+        // We only own the tab we created: close it, never the user's browser.
+        if (connectTab?.targetId) {
+          try {
+            await conn.send("Target.closeTarget", { targetId: connectTab.targetId }, 2000);
+          } catch {
+            /* the tab may be gone already */
+          }
+        }
+      } else {
+        try {
+          await conn.send("Browser.close", {}, 2000);
+        } catch {
+          /* ignore */
+        }
+      }
+      conn.close();
     }
-    conn?.close();
-    killProcess(launched.proc);
-    rmProfile(launched.profileDir);
+    if (launched) {
+      killProcess(launched.proc);
+      rmProfile(launched.profileDir);
+    }
   }
 }
 

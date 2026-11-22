@@ -105,6 +105,12 @@ export interface AnalyzeWebOptions {
   browser?: boolean;
   /** Explicit browser executable for `browser` mode. */
   browserPath?: string;
+  /**
+   * Connect to an already-running browser (your real one, with its cookies and
+   * logged-in sessions) over CDP. Values: `http://127.0.0.1:9222` or a
+   * `ws://…` page target URL.
+   */
+  connectUrl?: string;
   /** Extra wait after the load event in `browser` mode. Default: 1200. */
   settleMs?: number;
   /**
@@ -211,6 +217,8 @@ export interface WebPageInfo {
   capture: "http" | "browser";
   /** In `browser` mode: whether a visible window was used. */
   headed?: boolean;
+  /** In `browser` mode: CDP endpoint of an external browser that was driven. */
+  connect?: string;
   /** Set when the page is a bot challenge/interstitial rather than the site. */
   challenge?: ChallengeInfo;
   redirects: { from: string; to: string }[];
@@ -494,7 +502,7 @@ export async function analyzeWeb(
     );
   }
 
-  const useBrowser = opts.browser === true;
+  const useBrowser = opts.browser === true || Boolean(opts.connectUrl);
   let captured: BrowserCapture | null = null;
 
   let usedUserAgent = userAgent ?? DEFAULT_USER_AGENT;
@@ -505,6 +513,7 @@ export async function analyzeWeb(
     try {
       captured = await captureWithBrowser(requested.href, {
         browserPath: opts.browserPath,
+        connectUrl: opts.connectUrl,
         timeoutMs: Math.max(timeoutMs, 20000),
         settleMs: opts.settleMs,
         watchMs: (opts.watchSeconds ?? 0) * 1000,
@@ -925,7 +934,8 @@ export async function analyzeWeb(
       userAgent: usedUserAgent,
       userAgentFallback,
       capture: useBrowser ? "browser" : "http",
-      ...(useBrowser ? { headed: opts.headed === true } : {}),
+      ...(useBrowser && !opts.connectUrl ? { headed: opts.headed === true } : {}),
+      ...(useBrowser && opts.connectUrl ? { connect: opts.connectUrl } : {}),
       ...(captured?.challenge ? { challenge: captured.challenge } : {}),
       redirects:
         page.url === requested.href ? [] : [{ from: requested.href, to: page.url }],

@@ -135,6 +135,10 @@ web options:
       --browser        Capture with a headless Chrome/Edge (executes JS, gets past
                        JS challenges; also captures XHR, cookies and storage)
       --browser-path <path> Explicit browser executable for --browser
+      --connect <endpoint> Drive an already-running browser over CDP: pass
+                       http://127.0.0.1:9222 (or a ws:// page target). Your
+                       browser keeps its real profile, cookies and sessions; a
+                       new tab is opened, analyzed, and closed
       --headed         Show a real browser window (some challenges reject headless)
       --settle <ms>    Extra wait after load in --browser mode (default: 1200)
       --watch <seconds> Keep observing the page after it settles and record
@@ -154,8 +158,9 @@ tui options:
       --scan <file>    Run analysis and open the TUI directly
       --web <url>      Analyze a live site and open the TUI directly
                        (accepts --user-agent, --cookie, --ignore-robots, --browser,
-                        --browser-path, --headed, --settle, --watch, --challenge-wait,
-                        --allow-challenge, --max-scripts, --timeout)
+                        --browser-path, --connect, --headed, --settle, --watch,
+                        --challenge-wait, --allow-challenge, --max-scripts,
+                        --timeout)
       --preview        Print a static frame (no interaction; ansi engine only)
       --engine <name>  Engine: ansi (default) | opentui (needs Node >= 26.4 or Bun)
       --min-length <n> (with --scan/--web) Ignore shorter strings
