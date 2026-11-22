@@ -452,3 +452,52 @@ test("CLI: patch modifies an existing .asar with text replacement and --replace 
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("CLI: decode exits with code 1 on missing input", () => {
+  const res = runCli(["decode"]);
+  assert.equal(res.status, 1);
+  assert.match(res.stderr, /Usage: re-tool decode/);
+});
+
+test("CLI: decode auto-detects base64 and formats JSON", () => {
+  const res = runCli(["decode", "c2VjcmV0LXRva2VuLTEyMw==", "--json"]);
+  assert.equal(res.status, 0);
+
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.command, "decode");
+  assert.equal(parsed.detected, "base64");
+  assert.equal(parsed.decoded, "secret-token-123");
+  assert.equal(parsed.isText, true);
+});
+
+test("CLI: decode auto-detects hex and outputs text", () => {
+  const res = runCli(["decode", "48656c6c6f20576f726c64"]);
+  assert.equal(res.status, 0);
+  assert.match(res.stdout, /Decoded as Hexadecimal/);
+  assert.match(res.stdout, /Hello World/);
+});
+
+test("CLI: decode reads input from file with -f", async () => {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "re-tool-cli-decode-"));
+  const tokenFile = path.join(tmpDir, "token.b64");
+  try {
+    await fs.writeFile(tokenFile, "YXBpLWtleS05OTk=");
+    const res = runCli(["decode", "-f", tokenFile, "--json"]);
+    assert.equal(res.status, 0);
+
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.detected, "base64");
+    assert.equal(parsed.decoded, "api-key-999");
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("CLI: decode with --as forces specific decoding", () => {
+  const res = runCli(["decode", "deadbeef", "--as", "hex", "--json"]);
+  assert.equal(res.status, 0);
+
+  const parsed = JSON.parse(res.stdout);
+  assert.equal(parsed.detected, "hex");
+  assert.equal(parsed.bytes, 4);
+});

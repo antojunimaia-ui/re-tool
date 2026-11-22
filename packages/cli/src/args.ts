@@ -36,6 +36,7 @@ export const BOOL_FLAGS = new Set([
   "no-backup",
   "pack",
   "in-place",
+  "hex",
 ]);
 
 export function parseArgs(argv: string[]): ParsedArgs {

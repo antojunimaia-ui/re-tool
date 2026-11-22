@@ -6,8 +6,8 @@ A reverse engineering assistant for **JavaScript/Electron**.
 
 ```
 re-tool/
-  packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, patch, web + browser capture)
-  packages/cli/    → `re-tool` binary (search / extract / scan / web / asar / patch / unpack / audit / tui / beautify / pos / line / doctor / version)
+  packages/core/   → shared analysis engine (format, strings, webpack, source maps, obfuscators, asar, patch, decode, web + browser capture)
+  packages/cli/    → `re-tool` binary (search / extract / scan / web / asar / patch / decode / unpack / audit / tui / beautify / pos / line / doctor / version)
   packages/tui/    → interactive terminal UIs (ansi + opentui engines)
   fixtures/        → demo files (webpack, obfuscated, extmap, demo-app.asar)
   scripts/         → reproducible fixture generator
@@ -73,6 +73,12 @@ re-tool patch app.asar --replace main.js=./patched-main.js
 re-tool patch app.asar -f main.js -s "isDev = false" --replace-text "isDev = true"
 re-tool patch app.asar --remove telemetry.js
 
+# Auto-detect and decode obfuscated tokens/strings
+re-tool decode "c2VjcmV0LXRva2VuLTEyMw=="
+re-tool decode "48656c6c6f20576f726c64"
+re-tool decode "\\x48\\x65\\x6c\\x6c\\x6f"
+echo "c2VjcmV0" | re-tool decode
+
 # Content window around an offset / specific line
 re-tool pos 4096 --file sample.js --context 200
 re-tool line 42 --file sample.js
@@ -96,6 +102,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `web <url>` | Analyzes a live site (HTML + bundles): frameworks, endpoints, routes, keys, flags |
 | `asar <file>` | Lists the contents of an `.asar` file (Electron) |
 | `patch <file\|dir>` | Modify, inject into, or pack/recompile Electron `.asar` apps |
+| `decode [string]` | Auto-detect and decode Base64, Hex, escapes, URL, HTML, JWT |
 | `unpack <file>` | Reconstructs original source tree from source maps (`.js`, `.map`, `.asar`) |
 | `audit <target>` | Security and attack surface audit (`.asar`, `.js`, live URLs) |
 | `tui` | Navigate a report interactively (JSON file, `--scan` or `--web`) |
@@ -212,6 +219,42 @@ re-tool patch app.asar --remove telemetry.js --remove analytics.js
 
 # Save to a new file instead of modifying in-place
 re-tool patch app.asar -o patched-app.asar --no-backup
+```
+
+### Multi-format string decoding (`re-tool decode`)
+
+`re-tool decode` automatically recognizes encoding formats and decodes obfuscated tokens, strings, or payloads without manual trial and error:
+
+Supported formats:
+- **Base64** (`c2VjcmV0...`) & **Base64 URL-safe** (`c2Vj-cmV0_...`)
+- **Hexadecimal** (`736563726574`, with or without `0x`, spaces, or colons)
+- **Hex-escaped sequences** (`\x73\x65\x63...`)
+- **Unicode-escaped sequences** (`\u0073\u0065...` and `\u{73}`)
+- **URL-encoded strings** (`secret%20token`)
+- **HTML entities** (`&lt;script&gt;`, decimal `&#65;`, hex `&#x41;`)
+- **JWT (JSON Web Tokens)** (decodes header and payload automatically)
+
+```sh
+# Auto-detect encoding
+re-tool decode "c2VjcmV0LXRva2Vu"
+
+# Pipe via stdin
+echo "c2VjcmV0" | re-tool decode
+
+# Read from file
+re-tool decode -f payload.b64
+
+# Force specific encoding
+re-tool decode "deadbeef" --as hex
+
+# Show all candidate decodings ordered by confidence
+re-tool decode "deadbeef" --all
+
+# Binary payload hex dump
+re-tool decode "89504e470d0a1a0a" --hex
+
+# Structured JSON for pipelines
+re-tool decode "c2VjcmV0" --json
 ```
 
 ### Source map reconstruction (`re-tool unpack`)

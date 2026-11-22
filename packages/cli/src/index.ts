@@ -14,6 +14,7 @@ import {
   cmdScan,
   cmdAsar,
   cmdPatch,
+  cmdDecode,
   cmdUnpack,
   cmdAudit,
   cmdTui,
@@ -41,6 +42,7 @@ Commands:
                     finds frameworks, endpoints, routes, keys, flags
   asar <file>       List the contents of an .asar file (Electron)
   patch <file|dir>  Modify, inject into, or pack/recompile Electron .asar apps
+  decode [string]   Auto-detect and decode base64, hex, escapes, URL, HTML, JWT
   unpack <file>     Reconstruct original source tree from source maps (.js, .map, .asar)
   audit <target>    Run security & attack surface audit on Electron app, JS bundle or live site
   tui              Navigate a report interactively (JSON file or --scan/--web)
@@ -90,6 +92,15 @@ patch options:
       --prepend <str>  Prepend text to --file
       --unpack <glob>  Files to extract to <dest>.unpacked/ (e.g. "*.node")
       --pack           Explicitly treat target as directory to pack
+      --json           Print structured JSON output
+
+decode options:
+      --as <encoding>  Force specific encoding: base64, base64url, hex,
+                       hex-escaped, unicode-escaped, url-encoded, html-entity, jwt
+  -a, --all            Show all matching decoding candidates
+      --hex            Display decoded output as hex dump
+  -o, --out <path>     Save decoded binary or text to file
+  -f, --file <path>    Read input string from file
       --json           Print structured JSON output
 
 unpack options:
@@ -174,6 +185,12 @@ Examples:
   re-tool patch app.asar --replace main.js=./patched-main.js
   re-tool patch app.asar -f main.js -s "isDev = false" --replace-text "isDev = true"
   re-tool patch app.asar --remove telemetry.js
+  re-tool decode "c2VjcmV0LXRva2VuLTEyMw=="
+  re-tool decode "48656c6c6f20576f726c64"
+  re-tool decode "\\x48\\x65\\x6c\\x6c\\x6f"
+  re-tool decode "hello%20world%21"
+  re-tool decode eyJhbGciOi... --json
+  echo "c2VjcmV0" | re-tool decode
   re-tool unpack bundle.min.js -o ./src
   re-tool unpack bundle.js.map -o ./src --match "*.ts"
   re-tool unpack app.asar -o ./src --no-node-modules
@@ -224,6 +241,9 @@ export async function runCli(argv = process.argv.slice(2)): Promise<void> {
         break;
       case "patch":
         await cmdPatch(args);
+        break;
+      case "decode":
+        await cmdDecode(args);
         break;
       case "unpack":
         await cmdUnpack(args);

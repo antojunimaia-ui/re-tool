@@ -17,6 +17,12 @@ import {
   extractAsarFiles,
   packAsar,
   patchAsar,
+  decodeInput,
+  decodeAs,
+  hexDump,
+  getEncodingLabel,
+  type DecodeCandidate,
+  type DecodeEncoding,
   unpackSourceMap,
   auditTarget,
   type AuditReport,
@@ -985,5 +991,121 @@ export async function cmdPatch(args: ParsedArgs): Promise<void> {
   }
   if (result.unpackedFiles > 0) {
     console.log(`  Unpacked files: ${result.unpackedFiles}`);
+  }
+}
+
+async function readStdin(): Promise<string> {
+  if (process.stdin.isTTY) return "";
+  return new Promise((resolve, reject) => {
+    let data = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      data += chunk;
+    });
+    process.stdin.on("end", () => resolve(data.trim()));
+    process.stdin.on("error", reject);
+  });
+}
+
+export async function cmdDecode(args: ParsedArgs): Promise<void> {
+  let input = "";
+
+  const fileArg = optValue(args.options, "file", "f");
+  if (fileArg) {
+    try {
+      input = await readFile(resolveTarget(fileArg), "utf8");
+    } catch {
+      throw new ToolError(`File not found: ${fileArg}`);
+    }
+  } else if (args.positional[1] && args.positional[1] !== "-") {
+    input = args.positional[1];
+  } else {
+    input = await readStdin();
+  }
+
+  if (!input || input.trim().length === 0) {
+    throw new ToolError('Usage: re-tool decode <string> [options]  (or pipe via stdin, see "re-tool help")');
+  }
+
+  const asJson = hasFlag(args.bools, args.options, "json");
+  const forceHex = hasFlag(args.bools, args.options, "hex");
+  const showAll = hasFlag(args.bools, args.options, "all", "a");
+  const forcedEncoding = optValue(args.options, "as");
+  const outPath = optValue(args.options, "out", "o");
+
+  let candidates: DecodeCandidate[] = [];
+  let detected: DecodeEncoding;
+
+  if (forcedEncoding) {
+    const c = decodeAs(input, forcedEncoding as DecodeEncoding);
+    candidates = [c];
+    detected = c.encoding;
+  } else {
+    const res = decodeInput(input);
+    candidates = res.candidates;
+    detected = res.detected;
+  }
+
+  const primary = candidates[0];
+
+  if (outPath) {
+    await writeFile(resolveTarget(outPath), primary.bytes);
+  }
+
+  if (asJson) {
+    printJson({
+      command: "decode",
+      input,
+      detected,
+      label: getEncodingLabel(detected),
+      isText: primary.isText,
+      decoded: primary.isText ? primary.text : undefined,
+      hex: primary.bytes.toString("hex"),
+      bytes: primary.bytes.length,
+      confidence: primary.confidence,
+      candidates: showAll
+        ? candidates.map((c) => ({
+            encoding: c.encoding,
+            label: getEncodingLabel(c.encoding),
+            isText: c.isText,
+            decoded: c.isText ? c.text : undefined,
+            hex: c.bytes.toString("hex"),
+            bytes: c.bytes.length,
+            confidence: c.confidence,
+          }))
+        : undefined,
+    });
+    return;
+  }
+
+  if (showAll && candidates.length > 1) {
+    console.log(`[re-tool] Discovered ${candidates.length} possible decoding(s) for input:\n`);
+    for (let i = 0; i < candidates.length; i++) {
+      const c = candidates[i];
+      const percent = Math.round(c.confidence * 100);
+      console.log(`--- [Candidate #${i + 1}] ${getEncodingLabel(c.encoding)} (${percent}% confidence) ---`);
+      if (forceHex || !c.isText) {
+        console.log(hexDump(c.bytes));
+      } else {
+        console.log(c.text);
+      }
+      console.log();
+    }
+    if (outPath) {
+      console.log(`[re-tool] Decoded output saved to ${outPath}`);
+    }
+    return;
+  }
+
+  const percent = Math.round(primary.confidence * 100);
+  console.log(`[re-tool] Decoded as ${getEncodingLabel(primary.encoding)} (${percent}% confidence):`);
+  if (forceHex || !primary.isText) {
+    console.log(hexDump(primary.bytes));
+  } else {
+    console.log(primary.text);
+  }
+
+  if (outPath) {
+    console.log(`[re-tool] Decoded output saved to ${outPath}`);
   }
 }
