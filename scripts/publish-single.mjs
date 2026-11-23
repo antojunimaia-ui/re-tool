@@ -151,6 +151,10 @@ function assembleSinglePackage(opts) {
         },
         type: "module",
         bin: { "re-tool": "dist/index.js" },
+        exports: {
+          ".": "./dist/index.js",
+          "./tools": "./dist/tools.js",
+        },
         files: [
           "dist",
           "README.md",

@@ -26,6 +26,7 @@ import {
 
 export * from "./args.js";
 export * from "./commands.js";
+export * from "./tools.js";
 
 export const HELP = `
 re-tool — reverse engineering assistant (JS/Electron)

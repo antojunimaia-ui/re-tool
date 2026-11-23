@@ -12,6 +12,13 @@ import {
   hasFlag,
   parseNonNegativeInt,
 } from "../dist/args.js";
+import {
+  tools,
+  getTool,
+  callTool,
+  adaptTools,
+} from "../dist/tools.js";
+import { ToolError } from "re-tool-core";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const CLI_PATH = path.join(ROOT, "packages/cli/dist/index.js");
@@ -76,6 +83,94 @@ test("parseArgs: --connect captures the CDP endpoint", () => {
   const parsed = parseArgs(["web", "https://example.com", "--connect", "http://127.0.0.1:9222"]);
   assert.deepEqual(parsed.positional, ["web", "https://example.com"]);
   assert.equal(optValue(parsed.options, "connect"), "http://127.0.0.1:9222");
+});
+
+// ---------------------------------------------------------------------------
+// Tool-call surface (core-direct handlers, no CLI spawn)
+// ---------------------------------------------------------------------------
+
+test("tools: canonical registry exposes the expected tool names", () => {
+  const names = tools.map((t) => t.name);
+  for (const expected of ["search", "extract", "scan", "asar", "beautify", "decode", "web", "audit"]) {
+    assert.ok(names.includes(expected), `missing tool ${expected}`);
+  }
+  // every tool has the full contract
+  for (const t of tools) {
+    assert.ok(typeof t.name === "string" && t.name.length > 0);
+    assert.ok(typeof t.description === "string" && t.description.length > 0);
+    assert.ok(t.inputSchema && t.inputSchema.type === "object");
+    assert.ok(Array.isArray(t.sideEffects));
+    assert.equal(typeof t.handler, "function");
+  }
+});
+
+test("tools: handlers call the core directly (search/scan/decode)", async () => {
+  const target = path.join(ROOT, "packages/core/src/errors.ts");
+
+  const search = await callTool("search", { file: target, term: "ToolError", limit: 2 });
+  assert.equal(search.totalMatches, 2);
+  assert.equal(search.shown, 2);
+
+  const scan = await callTool("scan", { file: target, limit: 5 });
+  assert.equal(scan.schema, "re-tool/report@2");
+  assert.ok(scan.format);
+  assert.ok(scan.summary.totalStrings >= 0);
+
+  const dec = await callTool("decode", { input: "aGVsbG8gd29ybGQ=" });
+  assert.equal(dec.detected, "base64");
+  assert.equal(dec.decoded, "hello world");
+});
+
+test("tools: web handler returns a web report (phase 1, no browser)", async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end(`
+      <!doctype html><html><head><title>Tool Web</title></head>
+      <body><script src="/app.js"></script></body></html>`);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}/`;
+  try {
+    const report = await callTool("web", { url, timeoutMs: 8000 });
+    assert.equal(report.schema, "re-tool/web-report@1");
+    assert.equal(report.page.status, 200);
+    assert.equal(report.page.capture, "http");
+    assert.equal(report.page.title, "Tool Web");
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test("tools: adaptTools maps to openai/anthropic/custom schemas", () => {
+  const openai = adaptTools("openai");
+  const first = openai[0];
+  assert.equal(first.type, "function");
+  assert.equal(first.function.name, "search");
+  assert.equal(first.function.parameters.type, "object");
+
+  const anthropic = adaptTools("anthropic");
+  assert.equal(anthropic[0].name, "search");
+  assert.ok("input_schema" in anthropic[0]);
+
+  const custom = adaptTools("custom", (t) => ({
+    method: t.name,
+    argsSchema: t.inputSchema,
+    security: t.sideEffects,
+  }));
+  assert.deepEqual(custom[0], {
+    method: "search",
+    argsSchema: getTool("search").inputSchema,
+    security: ["readonly"],
+  });
+
+  // default: canonical array copy
+  const canonical = adaptTools("custom");
+  assert.equal(canonical.length, tools.length);
+  assert.notEqual(canonical, tools); // copy
+});
+
+test("tools: unknown tool throws ToolError with exit code 2", () => {
+  assert.throws(() => getTool("nope"), (e) => e instanceof ToolError && e.exitCode === 2);
 });
 
 test("parseArgs: flags in BOOL_FLAGS never consume the next argument", () => {

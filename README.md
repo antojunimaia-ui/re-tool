@@ -169,6 +169,66 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 
 Exit codes: `0` success · `1` usage/domain error · `2` unknown command.
 
+## Tool-call surface (for agent harnesses)
+
+Besides the CLI, `re-tool` exports its capabilities as **plain tool-call
+records** ready to register in a code-agent harness (Claude Code, Cursor,
+OpenAI function calling, or your own custom schema). This is the
+agent-facing interface: every tool's handler calls the core engine directly
+(no subprocess), and returns the same canonical JSON reports as the CLI.
+
+```ts
+import { tools } from "@juniormaia/re-tool/tools";
+
+// tools: Array<{ name, description, inputSchema, sideEffects, handler }>
+```
+
+Each tool is a self-contained record:
+
+```ts
+{
+  name: "web",
+  description: "Analyze a live website: …",
+  inputSchema: { type: "object", properties: { url: { type: "string" }, … }, required: ["url"] },
+  sideEffects: ["network", "browser"],      // for permission decisions
+  handler: (args) => Promise<json>,          // calls the core directly
+}
+```
+
+- `handler(args)` resolves to the canonical report (`re-tool/web-report@1`,
+  `re-tool/report@2`, `re-tool/electron-report@1`, …) — the same schemas the
+  CLI emits
+- `sideEffects` tells the harness what a call can do: `readonly`,
+  `network`, `browser`, `mutating` — use it to gate permissions (e.g. ask
+  before anything `mutating`, block/blame `network` + `browser` if needed)
+- Domain errors throw `ToolError` (with `exitCode`), so a harness can map
+  them to its own error shape
+
+Helpers:
+
+```ts
+import { callTool, getTool, adaptTools } from "@juniormaia/re-tool/tools";
+
+await callTool("search", { file: "app.js", term: "token" });
+getTool("web");                       // lookup by name
+
+// Map to a harness schema:
+adaptTools("openai");                 // [{ type:"function", function:{ name, description, parameters } }]
+adaptTools("anthropic");              // [{ name, description, input_schema }]
+adaptTools("custom", (t) => ({        // bring your own shape
+  method: t.name,
+  argsSchema: t.inputSchema,
+  security: t.sideEffects,
+}));
+```
+
+The canonical array is the source of truth: if your harness has a custom tool
+schema, map the records yourself with a function like the `custom` example —
+nothing is tied to a specific transport or provider format.
+
+Available tools: `search`, `extract`, `scan`, `asar`, `beautify`, `decode`,
+`web`, `audit`. Each maps one-to-one to the CLI command of the same name.
+
 ### `scan` report (`re-tool/report@2`)
 
 The `scan` command emits JSON with:
