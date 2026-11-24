@@ -55,7 +55,7 @@ export * from "./web-findings.js";
 export * from "./web-download.js";
 
 export const DEFAULT_USER_AGENT =
-  "re-tool/0.5.0 (+https://github.com/antojunimaia-ui/re-tool)";
+  "re-tool/0.5.1 (+https://github.com/antojunimaia-ui/re-tool)";
 
 export const BROWSER_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";

@@ -154,7 +154,7 @@ Without installing: `node packages/cli/dist/index.js <command> ...`
 | `--web <url>` | tui | — | Analyze a live site then open the TUI |
 | `--max-scripts <n>` | web | `40` | Max scripts downloaded (`0` = no limit) |
 | `--timeout <ms>` | web | `15000` | Per-request timeout |
-| `--user-agent <ua>` | web | `re-tool/0.5.0` | Override the User-Agent header |
+| `--user-agent <ua>` | web | `re-tool/0.5.1` | Override the User-Agent header |
 | `--cookie <header>` | web | — | Cookie header (e.g. `session=abc; theme=dark`) |
 | `--ignore-robots` | web | — | Skip the `robots.txt` check (authorized targets only) |
 | `--browser` | web | — | Capture with Chrome/Edge over CDP (executes JS, records XHR and storage) |

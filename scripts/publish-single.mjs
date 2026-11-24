@@ -39,7 +39,7 @@ function parseArgs(argv) {
   const opts = {
     out: DEFAULT_OUT,
     name: "@juniormaia/re-tool",
-    version: ROOT_PKG.version || "0.5.0",
+    version: ROOT_PKG.version || "0.5.1",
     build: false,
     pack: false,
     publish: false,
