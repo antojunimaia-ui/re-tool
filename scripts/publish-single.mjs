@@ -1,7 +1,8 @@
 // Builds a self-contained single npm package (default: `re-tool`) with
 // re-tool-core and re-tool-tui bundled into its node_modules, so only ONE
-// publish is needed. Usable as a CLI:
+// publish is needed. Usable as a script:
 //
+//   npm run build:pub [-- options]
 //   node scripts/publish-single.mjs [options]
 import { mkdirSync, cpSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -14,6 +15,7 @@ const ROOT_PKG = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"
 
 const HELP = `
 Usage:
+  npm run build:pub [-- options]
   node scripts/publish-single.mjs [options]
 
 Builds the self-contained single npm package "@juniormaia/re-tool" (bundling
