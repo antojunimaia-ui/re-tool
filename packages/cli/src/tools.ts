@@ -18,6 +18,8 @@ import {
   readSource,
   findMatches,
   extractCaptures,
+  windowAt,
+  readLine,
   scanSource,
   analyzeAsarApp,
   beautify,
@@ -26,6 +28,10 @@ import {
   getEncodingLabel,
   analyzeWeb,
   auditTarget,
+  patchAsar,
+  packAsar,
+  unpackSourceMap,
+  probeBrowser,
   type DecodeEncoding,
   type DecodeCandidate,
   type AnalyzeWebOptions,
@@ -150,6 +156,58 @@ const tools: RetoolTool[] = [
         unique: bool(args, "unique"),
         limit: num(args, "limit", 1000),
       });
+    },
+  },
+
+  {
+    name: "pos",
+    description:
+      "Show a content window around a character offset in a file. Returns the slice of " +
+      "text around `offset`. Use to inspect exactly what sits at a known offset (e.g. from " +
+      "a scan or search result).",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "Path to the file." },
+        offset: { type: "integer", minimum: 0, description: "Character offset (0-based) to center on." },
+        before: { type: "integer", minimum: 0, description: "Characters before the offset included in the window. Default: 100." },
+        context: { type: "integer", minimum: 0, description: "Characters after the offset included in the window. Default: 400." },
+      },
+      required: ["file", "offset"],
+    },
+    sideEffects: ["readonly"],
+    async handler(args) {
+      const file = requireArg(args, "file", "pos");
+      const offset = num(args, "offset", 0);
+      const source = await readSource(file);
+      return windowAt(source, offset, {
+        before: num(args, "before", 100),
+        context: num(args, "context", 400),
+      });
+    },
+  },
+
+  {
+    name: "line",
+    description:
+      "Show one specific line of a file (1-based line number), with optional truncation. " +
+      "Returns the line content and whether it was truncated. Use to read a single source " +
+      "line referenced by another finding.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        file: { type: "string", description: "Path to the file." },
+        line: { type: "integer", minimum: 1, description: "1-based line number." },
+        maxLength: { type: "integer", minimum: 1, description: "Truncate lines longer than this. Default: 400." },
+      },
+      required: ["file", "line"],
+    },
+    sideEffects: ["readonly"],
+    async handler(args) {
+      const file = requireArg(args, "file", "line");
+      const lineNumber = num(args, "line", 1);
+      const source = await readSource(file);
+      return readLine(source, lineNumber, num(args, "maxLength", 400));
     },
   },
 
@@ -352,6 +410,161 @@ const tools: RetoolTool[] = [
         maxRoutes: num(args, "maxRoutes", 300),
       };
       return analyzeWeb(url, opts);
+    },
+  },
+
+  {
+    name: "patch",
+    description:
+      "Modify an Electron .asar archive: replace entries with local files, search/replace " +
+      "text inside entries, append/prepend content, or remove entries. By default patches " +
+      "in place (with a .bak backup); pass `out` to write a new archive. Returns a summary " +
+      "of modified/added/removed entries. MUTATING: writes files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        asar: { type: "string", description: "Path to the .asar archive to patch." },
+        out: { type: "string", description: "Output .asar path. Omit to patch in place (with backup)." },
+        backup: { type: "boolean", description: "Create <asarPath>.bak when patching in place. Default: true." },
+        replaceFiles: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description: "Map of entry path inside the ASAR (e.g. \"app/main.js\") → local file path to replace it with.",
+        },
+        replaceText: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              file: { type: "string" },
+              search: { type: "string", description: "Literal text or regex to find (string form)." },
+              replace: { type: "string" },
+            },
+            required: ["file", "search", "replace"],
+          },
+          description: "Search-and-replace rules applied to text entries.",
+        },
+        append: {
+          type: "array",
+          items: { type: "object", properties: { file: { type: "string" }, content: { type: "string" } }, required: ["file", "content"] },
+          description: "Append text to entries.",
+        },
+        prepend: {
+          type: "array",
+          items: { type: "object", properties: { file: { type: "string" }, content: { type: "string" } }, required: ["file", "content"] },
+          description: "Prepend text to entries.",
+        },
+        removeFiles: { type: "array", items: { type: "string" }, description: "Entry paths to remove from the archive." },
+        unpack: { type: "string", description: "Glob for files to keep in <dest>.unpacked/ when repacking." },
+      },
+      required: ["asar"],
+    },
+    sideEffects: ["readonly", "mutating"],
+    async handler(args) {
+      const asar = requireArg(args, "asar", "patch");
+      const replaceText = (args.replaceText as unknown[] | undefined)?.map((r) => {
+        const rule = r as Record<string, unknown>;
+        return {
+          file: str(rule, "file"),
+          search: str(rule, "search"),
+          replace: str(rule, "replace"),
+        };
+      });
+      const append = (args.append as unknown[] | undefined)?.map((r) => {
+        const rule = r as Record<string, unknown>;
+        return { file: str(rule, "file"), content: str(rule, "content") };
+      });
+      const prepend = (args.prepend as unknown[] | undefined)?.map((r) => {
+        const rule = r as Record<string, unknown>;
+        return { file: str(rule, "file"), content: str(rule, "content") };
+      });
+      return patchAsar(asar, {
+        out: str(args, "out") || undefined,
+        backup: bool(args, "backup", true),
+        replaceFiles: (args.replaceFiles as Record<string, string> | undefined) ?? undefined,
+        replaceText,
+        append,
+        prepend,
+        removeFiles: (args.removeFiles as string[] | undefined) ?? undefined,
+        unpack: str(args, "unpack") || undefined,
+      });
+    },
+  },
+
+  {
+    name: "unpack",
+    description:
+      "Reconstruct the original source tree from a source map: pass a .js bundle (with " +
+      "inline/external map), a .map file, or a .asar archive. Restores files into `out` " +
+      "directory or returns their contents (with `contents: true`). Returns a summary of " +
+      "restored files, bytes and skipped entries. MUTATING: writes files when `out` is set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        target: { type: "string", description: "Path to the .js bundle, .map file, or .asar archive." },
+        out: { type: "string", description: "Output directory. Required unless `contents` is true." },
+        match: { type: "string", description: "Glob filter on source paths (e.g. \"*.tsx\", \"src/**\")." },
+        paths: { type: "array", items: { type: "string" }, description: "Exact relative paths or basenames to extract." },
+        excludeNodeModules: { type: "boolean", description: "Exclude paths containing node_modules. Default: false." },
+      },
+      required: ["target"],
+    },
+    sideEffects: ["readonly", "mutating"],
+    async handler(args) {
+      const target = requireArg(args, "target", "unpack");
+      const out = str(args, "out");
+      if (!out) throw new ToolError('unpack: missing required argument "out".');
+      return unpackSourceMap(target, out, {
+        match: str(args, "match") || undefined,
+        paths: (args.paths as string[] | undefined) ?? undefined,
+        excludeNodeModules: bool(args, "excludeNodeModules"),
+      });
+    },
+  },
+
+  {
+    name: "doctor",
+    description:
+      "Check the environment re-tool depends on: Node version (global WebSocket availability), " +
+      "a Chromium-based browser (found? version?), that CDP actually works (launches a probe " +
+      "page), outbound network, and the active defaults (max scripts, byte budgets, timeout). " +
+      "Returns a re-tool/doctor@1 report. Run before debugging browser-dependent tools.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        browserPath: { type: "string", description: "Explicit browser executable path to check." },
+      },
+    },
+    sideEffects: ["readonly", "network", "browser"],
+    async handler(args) {
+      const started = Date.now();
+      const nodeVersion = process.versions.node;
+      const browser = await probeBrowser({ browserPath: str(args, "browserPath") || undefined });
+      const warnings: string[] = [];
+      if (!browser.path) {
+        warnings.push(
+          "No Chromium-based browser found: --browser is unavailable. Install Chrome/Edge/Chromium, set RETOOL_BROWSER, or pass --browser-path <path>.",
+        );
+      } else if (!browser.cdpOk) {
+        warnings.push(`Browser found but the CDP probe failed: ${browser.error ?? "unknown error"}.`);
+      }
+      if (Number(nodeVersion.split(".")[0]) < 22) {
+        warnings.push(`Node ${nodeVersion} has no global WebSocket: --browser needs Node >= 22.`);
+      }
+      return {
+        schema: "re-tool/doctor@1",
+        node: { version: nodeVersion, platform: process.platform, arch: process.arch },
+        browser: {
+          found: browser.path !== null,
+          path: browser.path,
+          version: browser.version,
+          cdpOk: browser.cdpOk,
+          ms: browser.ms,
+          ...(browser.error ? { error: browser.error } : {}),
+        },
+        warnings,
+        elapsedMs: Date.now() - started,
+      };
     },
   },
 

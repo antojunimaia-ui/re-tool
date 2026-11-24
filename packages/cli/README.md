@@ -226,8 +226,9 @@ The canonical array is the source of truth: if your harness has a custom tool
 schema, map the records yourself with a function like the `custom` example —
 nothing is tied to a specific transport or provider format.
 
-Available tools: `search`, `extract`, `scan`, `asar`, `beautify`, `decode`,
-`web`, `audit`. Each maps one-to-one to the CLI command of the same name.
+Available tools: `search`, `extract`, `pos`, `line`, `scan`, `asar`,
+`beautify`, `decode`, `web`, `patch`, `unpack`, `doctor`, `audit`. Each maps
+one-to-one to the CLI command of the same name.
 
 ### `scan` report (`re-tool/report@2`)
 

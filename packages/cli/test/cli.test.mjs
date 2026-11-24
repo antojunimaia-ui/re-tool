@@ -91,7 +91,10 @@ test("parseArgs: --connect captures the CDP endpoint", () => {
 
 test("tools: canonical registry exposes the expected tool names", () => {
   const names = tools.map((t) => t.name);
-  for (const expected of ["search", "extract", "scan", "asar", "beautify", "decode", "web", "audit"]) {
+  for (const expected of [
+    "search", "extract", "pos", "line", "scan", "asar", "beautify",
+    "decode", "web", "patch", "unpack", "doctor", "audit",
+  ]) {
     assert.ok(names.includes(expected), `missing tool ${expected}`);
   }
   // every tool has the full contract
@@ -119,6 +122,29 @@ test("tools: handlers call the core directly (search/scan/decode)", async () => 
   const dec = await callTool("decode", { input: "aGVsbG8gd29ybGQ=" });
   assert.equal(dec.detected, "base64");
   assert.equal(dec.decoded, "hello world");
+});
+
+test("tools: pos and line handlers read the file directly", async () => {
+  const target = path.join(ROOT, "packages/core/src/errors.ts");
+
+  const pos = await callTool("pos", { file: target, offset: 10, context: 16 });
+  assert.equal(pos.file, target);
+  assert.equal(pos.start, 0);
+  assert.ok(pos.slice.length > 0);
+
+  const line = await callTool("line", { file: target, line: 7 });
+  assert.equal(line.lineNumber, 7);
+  assert.equal(line.truncated, false);
+  assert.ok(line.content.length > 0);
+
+  await assert.rejects(() => callTool("line", { file: target, line: 99999 }), /does not exist/);
+});
+
+test("tools: doctor handler probes the environment without a CLI spawn", async () => {
+  const doctor = await callTool("doctor", {});
+  assert.equal(doctor.schema, "re-tool/doctor@1");
+  assert.equal(doctor.node.version, process.versions.node);
+  assert.ok(Array.isArray(doctor.warnings));
 });
 
 test("tools: web handler returns a web report (phase 1, no browser)", async () => {
